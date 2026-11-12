@@ -67,6 +67,7 @@ export function createEngine({ providerFactory, forecast, ai, config, log = cons
   const withLock = createLocks();
   let provider;
   let state;
+  const webhookStatus = { enabled: false, url: null, error: null };
 
   function reset() {
     provider = providerFactory();
@@ -84,6 +85,7 @@ export function createEngine({ providerFactory, forecast, ai, config, log = cons
       }])),
       pledges: new Map(),
       orderIndex: new Map(),
+      webhookEvents: [],
     };
   }
   reset();
@@ -396,6 +398,52 @@ export function createEngine({ providerFactory, forecast, ai, config, log = cons
 
   const TERMINAL_BATCH = ['SUCCESS', 'DENIED', 'CANCELED'];
 
+  // ---------------- PayPal webhooks ----------------
+  // Called only after the route has verified the signature with PayPal. Payout state from a
+  // webhook is applied immediately; the caller then re-reads the batch from PayPal so the
+  // stored status always matches PayPal's own record.
+  function applyWebhookEvent(evt) {
+    const r = evt?.resource ?? {};
+    const batchId = r.payout_batch_id || r.batch_header?.payout_batch_id || null;
+    const entry = {
+      id: String(evt?.id ?? ''), type: String(evt?.event_type ?? 'UNKNOWN'), at: nowIso(),
+      resourceId: r.payout_item_id || batchId || r.id || null, districtId: null, duplicate: false,
+    };
+    if (entry.id && state.webhookEvents.some((e) => e.id === entry.id)) {
+      entry.duplicate = true;
+      return entry;
+    }
+    if (batchId) {
+      for (const d of state.districts.values()) {
+        for (const b of d.trigger?.payouts ?? []) {
+          if (b.payoutBatchId !== batchId) continue;
+          entry.districtId = d.id;
+          if (r.batch_header?.batch_status) b.batchStatus = r.batch_header.batch_status;
+          if (r.payout_item_id) {
+            const sid = r.payout_item?.sender_item_id;
+            const item = b.items.find((i) => i.payoutItemId === r.payout_item_id || (sid && i.senderItemId === sid)) ?? (b.items.length === 1 ? b.items[0] : null);
+            if (item) {
+              item.payoutItemId = r.payout_item_id;
+              if (r.transaction_status) item.status = r.transaction_status;
+              item.updatedAt = nowIso();
+            }
+          }
+          b.lastWebhookAt = entry.at;
+          b.lastWebhookType = entry.type;
+        }
+      }
+    } else if (r.id) {
+      for (const p of state.pledges.values()) {
+        if (p.authorization?.id === r.id || p.capture?.id === r.id) entry.districtId = p.districtId;
+      }
+    }
+    state.webhookEvents.unshift(entry);
+    if (state.webhookEvents.length > 100) state.webhookEvents.length = 100;
+    return entry;
+  }
+
+  function setWebhookStatus(s) { Object.assign(webhookStatus, s); }
+
   async function refreshPayouts(districtId) {
     const districts = districtId ? [getDistrict(districtId)] : [...state.districts.values()];
     for (const d of districts) {
@@ -472,7 +520,7 @@ export function createEngine({ providerFactory, forecast, ai, config, log = cons
     const pl = pledgesFor(d.id);
     const t = d.trigger;
     return {
-      id: d.id, name: d.name, shortName: d.shortName, region: d.region, country: d.country,
+      id: d.id, name: d.name, shortName: d.shortName, area: d.area, region: d.region, country: d.country,
       river: d.river, basin: d.basin, lat: d.lat, lon: d.lon, language: d.language,
       threshold: d.threshold, referenceBaselineM3s: d.referenceBaselineM3s,
       partner: { name: d.partner.name, email: config.payoutRecipientOverride || d.partner.email, sample: true },
@@ -524,7 +572,7 @@ export function createEngine({ providerFactory, forecast, ai, config, log = cons
       }
       if (t) {
         const sc = t.simulated ? 'SCENARIO' : 'LIVE';
-        rows.push({ id: t.id, time: t.at, type: 'Trigger', district: d.shortName, party: 'Deterministic trigger engine', amount: (t.capturedCents ?? 0) / 100, currency: 'USD', status: 'TRIGGERED', reference: t.id, scenario: sc, provider: providerLabel(), zone: '', note: `ratio ${t.evaluation.ratio.toFixed(2)} >= ${d.threshold}` });
+        rows.push({ id: t.id, time: t.at, type: 'Trigger', district: d.shortName, party: 'Floodgate trigger engine', amount: (t.capturedCents ?? 0) / 100, currency: 'USD', status: 'TRIGGERED', reference: t.id, scenario: sc, provider: providerLabel(), zone: '', note: `ratio ${t.evaluation.ratio.toFixed(2)} >= ${d.threshold}` });
         for (const b of t.payouts) {
           rows.push({ id: b.senderBatchId, time: b.createdAt, type: 'Payout batch', district: d.shortName, party: d.partner.name, amount: b.amountCents / 100, currency: 'USD', status: b.createState === 'REQUEST_FAILED' ? 'REQUEST_FAILED' : b.batchStatus || b.createState, reference: b.payoutBatchId || b.senderBatchId, scenario: sc, provider: providerLabel(), zone: '', note: b.error || b.pollError || `sender_batch_id ${b.senderBatchId}` });
           for (const i of b.items) rows.push({ id: i.senderItemId, time: b.createdAt, type: 'Payout item', district: d.shortName, party: `${i.partnerName} <${i.receiver}>`, amount: i.amountCents / 100, currency: 'USD', status: i.status, reference: i.payoutItemId || '—', scenario: sc, provider: providerLabel(), zone: '', note: i.errors || '' });
@@ -532,6 +580,11 @@ export function createEngine({ providerFactory, forecast, ai, config, log = cons
         for (const a of t.allocations) rows.push({ id: `${t.id}-${a.householdId}`, time: t.at, type: 'Household allocation', district: d.shortName, party: `${a.label} (${a.members} members)`, amount: a.amountCents / 100, currency: 'USD', status: 'ALLOCATED', reference: a.householdId, scenario: sc, provider: 'LEDGER ONLY', zone: a.zone, note: 'Distributed by relief partner' });
       }
       if (d.release) rows.push({ id: `${d.id}-release`, time: d.release.at, type: 'Release', district: d.shortName, party: 'Watch window closed', amount: d.release.voidedCents / 100, currency: 'USD', status: d.release.voidFailures ? 'RELEASED_WITH_FAILURES' : 'RELEASED', reference: '—', scenario: '—', provider: providerLabel(), zone: '', note: d.release.reason });
+    }
+    for (const e of state.webhookEvents) {
+      if (e.duplicate) continue;
+      const d = e.districtId ? state.districts.get(e.districtId) : null;
+      rows.push({ id: `wh-${e.id}`, time: e.at, type: 'PayPal webhook', district: d?.shortName ?? '—', party: 'PayPal (signature verified)', amount: null, currency: '', status: e.type, reference: e.resourceId || e.id, scenario: '—', provider: providerLabel(), zone: '', note: `Event ${e.id}` });
     }
     rows.sort((a, b) => (a.time < b.time ? 1 : -1));
     return rows;
@@ -544,6 +597,7 @@ export function createEngine({ providerFactory, forecast, ai, config, log = cons
       districts: [...state.districts.values()].map(districtSummary),
       pledges: [...state.pledges.values()].map(pledgeView),
       ledger: ledgerRows(),
+      webhooks: { enabled: webhookStatus.enabled, error: webhookStatus.error, lastEventAt: state.webhookEvents[0]?.at ?? null, received: state.webhookEvents.length },
     };
   }
 
@@ -558,6 +612,9 @@ export function createEngine({ providerFactory, forecast, ai, config, log = cons
     evaluate,
     release,
     refreshPayouts,
+    applyWebhookEvent,
+    setWebhookStatus,
+    get webhookStatus() { return webhookStatus; },
     expireWatchWindows,
     snapshot,
     districtSummary: (id) => districtSummary(getDistrict(id)),

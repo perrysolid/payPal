@@ -10,6 +10,16 @@ import { createMockProvider } from './payments/mock.js';
 import { createPayPalProvider } from './payments/paypal.js';
 import { DISTRICT_IDS } from './data/districts.js';
 
+export const WEBHOOK_PATH = '/api/webhooks/paypal';
+export const WEBHOOK_EVENTS = [
+  'PAYMENT.PAYOUTSBATCH.SUCCESS', 'PAYMENT.PAYOUTSBATCH.DENIED', 'PAYMENT.PAYOUTSBATCH.PROCESSING',
+  'PAYMENT.PAYOUTS-ITEM.SUCCEEDED', 'PAYMENT.PAYOUTS-ITEM.FAILED', 'PAYMENT.PAYOUTS-ITEM.BLOCKED',
+  'PAYMENT.PAYOUTS-ITEM.CANCELED', 'PAYMENT.PAYOUTS-ITEM.DENIED', 'PAYMENT.PAYOUTS-ITEM.HELD',
+  'PAYMENT.PAYOUTS-ITEM.REFUNDED', 'PAYMENT.PAYOUTS-ITEM.RETURNED', 'PAYMENT.PAYOUTS-ITEM.UNCLAIMED',
+  'PAYMENT.AUTHORIZATION.CREATED', 'PAYMENT.AUTHORIZATION.VOIDED',
+  'PAYMENT.CAPTURE.COMPLETED', 'PAYMENT.CAPTURE.DENIED',
+];
+
 loadEnvFile();
 const config = loadConfig();
 config.warnings.forEach((w) => console.warn(`[floodgate] ${w}`));
@@ -19,7 +29,11 @@ export function createApp({ cfg = config, forecast = createForecastService(), ai
   const engine = createEngine({ providerFactory: factory, forecast, ai, config: cfg });
   const app = express();
   app.disable('x-powered-by');
-  app.use(express.json({ limit: '32kb' }));
+  app.use(express.json({
+    limit: '64kb',
+    // Keep the exact bytes of webhook deliveries for signature verification.
+    verify: (req, res, buf) => { if (req.originalUrl === WEBHOOK_PATH) req.rawBody = buf.toString('utf8'); },
+  }));
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
@@ -42,6 +56,7 @@ export function createApp({ cfg = config, forecast = createForecastService(), ai
       paypalEnvironment: cfg.paymentMode === 'paypal' ? 'sandbox' : null,
       ai: { enabled: ai.enabled, model: ai.enabled ? ai.model : null },
       payoutRecipientOverride: Boolean(cfg.payoutRecipientOverride),
+      webhooks: { enabled: engine.webhookStatus.enabled },
       limits: { minPledge: '1.00', maxPledge: '1000.00', currency: 'USD' },
       disclaimers: [
         'Payments are processed in the PayPal Sandbox environment.',
@@ -51,6 +66,9 @@ export function createApp({ cfg = config, forecast = createForecastService(), ai
       ],
     });
   });
+
+  const specPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../docs/openapi.yaml');
+  app.get('/api/openapi.yaml', (req, res) => res.type('application/yaml').sendFile(specPath));
 
   app.get('/api/state', (req, res) => res.json(engine.snapshot()));
 
@@ -108,6 +126,24 @@ export function createApp({ cfg = config, forecast = createForecastService(), ai
     res.json({ district: engine.districtSummary(id) });
   }));
 
+  app.post(WEBHOOK_PATH, wrap(async (req, res) => {
+    const ws = engine.webhookStatus;
+    if (!ws.enabled || !ws.webhookId || typeof engine.provider.verifyWebhook !== 'function') {
+      return res.status(503).json({ error: 'Webhooks are not configured' });
+    }
+    let verified = false;
+    try {
+      verified = await engine.provider.verifyWebhook({ headers: req.headers, rawBody: req.rawBody, webhookId: ws.webhookId });
+    } catch (e) {
+      console.warn(`[floodgate] webhook verification error: ${e.message}`);
+    }
+    if (!verified) return res.status(400).json({ error: 'Webhook signature could not be verified' });
+    const entry = engine.applyWebhookEvent(req.body);
+    console.log(`[floodgate] webhook ${entry.type} ${entry.id}${entry.duplicate ? ' (duplicate)' : ''}`);
+    if (!entry.duplicate && entry.type.startsWith('PAYMENT.PAYOUTS')) engine.refreshPayouts(entry.districtId || undefined).catch(() => {});
+    res.json({ received: true });
+  }));
+
   app.post('/api/ask', wrap(async (req, res) => {
     const q = req.body?.question;
     if (typeof q !== 'string' || !q.trim() || q.length > 300) throw new HttpError(400, 'question must be 1-300 characters');
@@ -143,6 +179,23 @@ export function createApp({ cfg = config, forecast = createForecastService(), ai
   return { app, engine };
 }
 
+async function setupWebhooks(engine) {
+  if (config.paymentMode !== 'paypal' || typeof engine.provider.ensureWebhook !== 'function') return;
+  const base = (process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/+$/, '');
+  if (!/^https:\/\//.test(base)) {
+    console.log('[floodgate] webhooks off: no public https URL (set PUBLIC_BASE_URL); payout status is polled');
+    return;
+  }
+  const url = `${base}${WEBHOOK_PATH}`;
+  let webhookId = process.env.PAYPAL_WEBHOOK_ID || null;
+  if (!webhookId) {
+    const r = await engine.provider.ensureWebhook(url, WEBHOOK_EVENTS);
+    webhookId = r.id;
+    console.log(`[floodgate] PayPal webhook ${r.created ? 'registered' : 'found'} for ${url}`);
+  }
+  engine.setWebhookStatus({ enabled: true, url, webhookId, error: null });
+}
+
 function loadEnvFile() {
   const p = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../.env');
   if (!fs.existsSync(p)) return;
@@ -155,7 +208,18 @@ function loadEnvFile() {
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
   const { app, engine } = createApp();
-  setInterval(() => { engine.refreshPayouts().catch(() => {}); }, 10_000).unref();
+  setupWebhooks(engine).catch((e) => {
+    engine.setWebhookStatus({ enabled: false, error: e.message });
+    console.warn(`[floodgate] webhooks disabled: ${e.message}`);
+  });
+  // Polling remains as a fallback: every 10 s without webhooks, every 60 s with them.
+  let lastPoll = 0;
+  setInterval(() => {
+    const every = engine.webhookStatus.enabled ? 60_000 : 10_000;
+    if (Date.now() - lastPoll < every) return;
+    lastPoll = Date.now();
+    engine.refreshPayouts().catch(() => {});
+  }, 10_000).unref();
   setInterval(() => { engine.expireWatchWindows().catch(() => {}); }, 60_000).unref();
   app.listen(config.port, () => {
     console.log(`[floodgate] listening on :${config.port} | payments=${config.paymentMode.toUpperCase()} | ai=${config.ai ? 'claude' : 'offline-template'}`);

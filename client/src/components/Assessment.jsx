@@ -28,7 +28,7 @@ export default function Assessment({ district: d }) {
           <p className="rationale" style={{ marginTop: 0 }}>{a.rationale}</p>
           <div className="alerts">
             <div className="alert-box"><div className="eyebrow">Alert · English</div><p>{a.alertEnglish}</p></div>
-            <div className="alert-box local" lang={d.language.code}><div className="eyebrow">Alert · {d.language.name}</div><p>{a.alertLocal}</p></div>
+            <div className="alert-box local" lang={d.language.code} dir={d.language.dir || 'ltr'}><div className="eyebrow">Alert · {d.language.name}</div><p>{a.alertLocal}</p></div>
           </div>
           <div style={{ marginTop: 14 }}>
             <div className="eyebrow" style={{ marginBottom: 6 }}>Allocation weights by risk zone</div>

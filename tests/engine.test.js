@@ -202,7 +202,7 @@ describe('financial invariants', () => {
     expect(s.pledges).toHaveLength(0);
     expect(s.ledger).toHaveLength(0);
     expect(s.districts.every((d) => d.status === 'WATCHING' && !d.scenario)).toBe(true);
-    expect(s.districts).toHaveLength(6);
+    expect(s.districts).toHaveLength(13);
   });
 });
 
@@ -235,5 +235,71 @@ describe('allocations and AI guards', () => {
     expect(r.filterModel.district.filter).toBe('Sylhet');
     expect(r.filterModel.type.filter).toBe('Pledge');
     expect(r.filterModel.zone.filter).toBe('B');
+  });
+});
+
+describe('PayPal webhooks', () => {
+  it('applies a verified payout-item event once and ignores redelivery', async () => {
+    const engine = makeEngine();
+    await pledge(engine, 'lokoja', '20.00');
+    engine.setScenario('lokoja', true);
+    await engine.evaluate('lokoja');
+    const b = engine.districtSummary('lokoja').trigger.payouts[0];
+    const evt = {
+      id: 'WH-TEST-1',
+      event_type: 'PAYMENT.PAYOUTS-ITEM.SUCCEEDED',
+      resource: { payout_batch_id: b.payoutBatchId, payout_item_id: 'ITEM-XYZ', transaction_status: 'SUCCESS', payout_item: { sender_item_id: b.items[0].senderItemId } },
+    };
+    const first = engine.applyWebhookEvent(evt);
+    expect(first.districtId).toBe('lokoja');
+    const after = engine.districtSummary('lokoja');
+    expect(after.trigger.payouts[0].items[0].status).toBe('SUCCESS');
+    expect(after.trigger.payouts[0].items[0].payoutItemId).toBe('ITEM-XYZ');
+    expect(after.totals.payoutCompletedCents).toBe(2000);
+    expect(engine.applyWebhookEvent(evt).duplicate).toBe(true);
+    expect(engine.snapshot().ledger.filter((r) => r.type === 'PayPal webhook')).toHaveLength(1);
+  });
+
+  it('ignores events for unknown batches without changing state', async () => {
+    const engine = makeEngine();
+    const e = engine.applyWebhookEvent({ id: 'WH-2', event_type: 'PAYMENT.PAYOUTSBATCH.SUCCESS', resource: { batch_header: { payout_batch_id: 'NOPE', batch_status: 'SUCCESS' } } });
+    expect(e.districtId).toBeNull();
+    expect(engine.snapshot().districts.every((d) => d.trigger === null)).toBe(true);
+  });
+
+  it('embeds the raw webhook body verbatim when verifying with PayPal', async () => {
+    const { createPayPalProvider } = await import('../server/payments/paypal.js');
+    const calls = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url, opts) => {
+      calls.push({ url, opts });
+      if (url.endsWith('/v1/oauth2/token')) return new Response(JSON.stringify({ access_token: 't', expires_in: 3600 }), { status: 200 });
+      return new Response(JSON.stringify({ verification_status: 'SUCCESS' }), { status: 200 });
+    };
+    try {
+      const p = createPayPalProvider({ clientId: 'id', clientSecret: 'secret', baseUrl: 'https://api-m.sandbox.paypal.com' });
+      const raw = '{"id":"WH-1","event_type":"PAYMENT.PAYOUTS-ITEM.SUCCEEDED","resource":{"amount":{"value":"10.00"}}}';
+      const headers = { 'paypal-auth-algo': 'SHA256withRSA', 'paypal-cert-url': 'https://api.sandbox.paypal.com/cert', 'paypal-transmission-id': 'tid', 'paypal-transmission-sig': 'sig', 'paypal-transmission-time': '2026-11-12T00:00:00Z' };
+      expect(await p.verifyWebhook({ headers, rawBody: raw, webhookId: 'WHID' })).toBe(true);
+      const sent = calls.find((c) => c.url.endsWith('/verify-webhook-signature')).opts.body;
+      expect(sent.endsWith(`"webhook_event":${raw}}`)).toBe(true);
+      expect(JSON.parse(sent).webhook_id).toBe('WHID');
+      expect(await p.verifyWebhook({ headers: {}, rawBody: raw, webhookId: 'WHID' })).toBe(false);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+});
+
+describe('global districts', () => {
+  it('every district has a supported language template and a known area', () => {
+    const ds = buildDistricts();
+    expect(ds.length).toBe(13);
+    for (const d of ds) {
+      const a = templateAssessment({ district: d, evaluation: { ratio: 2.1, trigger: true, peak: 2000, baseline: 900, peakDate: '2026-11-15' }, simulated: false });
+      expect(a.alertLocal.length).toBeGreaterThan(20);
+      expect(['South Asia', 'Southeast Asia', 'Africa', 'South America', 'Europe']).toContain(d.area);
+      expect(d.households).toHaveLength(12);
+    }
   });
 });

@@ -52,6 +52,7 @@ export default function App() {
   const [snap, setSnap] = useState(null);
   const [forecasts, setForecasts] = useState({});
   const [selected, setSelected] = useState('sylhet');
+  const [area, setArea] = useState('All');
   const [busy, setBusy] = useState(null);
   const [toasts, setToasts] = useState([]);
   const [fatal, setFatal] = useState(null);
@@ -172,7 +173,7 @@ export default function App() {
       <main>
         <section className="hero">
           <div>
-            <div className="eyebrow" style={{ marginBottom: 6 }}>Forecast-triggered relief funding · South Asia</div>
+            <div className="eyebrow" style={{ marginBottom: 6 }}>Forecast-triggered relief funding · Global river basins</div>
             <h1>Pledge now. Pay only if the river forecast crosses the danger line.</h1>
             <p>Donors place a hold for a district. Floodgate tracks the GloFAS river-discharge forecast and, when a district crosses its danger threshold, captures the held pledges and pays the district’s relief partner ahead of the peak. If the threshold is not reached, every hold is released.</p>
             <p className="muted mono" style={{ fontSize: 12, marginTop: 10 }}>Across all districts: {usd(totals.held)} held · {usd(totals.cap)} captured</p>
@@ -180,13 +181,20 @@ export default function App() {
           <Stepper d={d} pledgeCount={pledgeCount} />
         </section>
 
-        <div className="section-head"><h2>District board</h2><span className="sub">Six basins · select a district</span></div>
-        <Board districts={snap.districts} forecasts={forecasts} selected={selected} onSelect={(id) => { setSelected(id); detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} />
+        <div className="section-head"><h2>District board</h2><span className="sub">{snap.districts.length} districts · {new Set(snap.districts.map((x) => x.country)).size} countries · select a district</span></div>
+        <div className="area-filter" role="group" aria-label="Filter by region">
+          {['All', ...new Set(snap.districts.map((x) => x.area))].map((a) => (
+            <button type="button" key={a} className={area === a ? 'on' : ''} aria-pressed={area === a} onClick={() => setArea(a)}>
+              {a}<span className="n">{a === 'All' ? snap.districts.length : snap.districts.filter((x) => x.area === a).length}</span>
+            </button>
+          ))}
+        </div>
+        <Board districts={area === 'All' ? snap.districts : snap.districts.filter((x) => x.area === area)} forecasts={forecasts} selected={selected} onSelect={(id) => { setSelected(id); detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} />
 
         <div ref={detailRef} className="section-head" style={{ scrollMarginTop: 70 }}><h2>District detail</h2><span className="sub">Relief partner: {d.partner.name}</span></div>
         <Detail district={d} forecast={fc} config={config} busy={busy} actions={actions} onRefreshForecast={() => loadForecast(selected, true)} />
         <Assessment district={d} />
-        <Settlement district={d} pledges={snap.pledges} busy={busy === 'payouts'} onRefresh={() => run('payouts', () => api.refreshPayouts(selected))} />
+        <Settlement district={d} webhooks={snap.webhooks} pledges={snap.pledges} busy={busy === 'payouts'} onRefresh={() => run('payouts', () => api.refreshPayouts(selected))} />
 
         <div className="section-head"><h2>Financial ledger</h2><span className="sub">Every authorization, capture, void, payout and allocation</span></div>
         <Ledger rows={snap.ledger} api={api} onError={toastError} />

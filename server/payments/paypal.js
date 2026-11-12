@@ -84,13 +84,13 @@ export function createPayPalProvider({ clientId, clientSecret, baseUrl }) {
   async function rest(method, path, body, requestId) {
     const headers = { Authorization: `Bearer ${await accessToken()}`, 'Content-Type': 'application/json' };
     if (requestId) headers['PayPal-Request-Id'] = requestId;
-    const res = await fetchWithTimeout(`${baseUrl}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
+    const res = await fetchWithTimeout(`${baseUrl}${path}`, { method, headers, body: body == null ? undefined : typeof body === 'string' ? body : JSON.stringify(body) });
     const text = await res.text();
     let j = null;
     try { j = text ? JSON.parse(text) : null; } catch { /* non-JSON */ }
     if (!res.ok) {
       const issue = j?.details?.[0]?.issue || j?.name || j?.message;
-      const err = new Error(`PayPal Payouts ${method} failed (${res.status}${issue ? `: ${issue}` : ''})`);
+      const err = new Error(`PayPal ${method} ${path.split('?')[0]} failed (${res.status}${issue ? `: ${issue}` : ''})`);
       err.status = res.status;
       err.code = j?.name || issue;
       err.debugId = j?.debug_id;
@@ -203,6 +203,40 @@ export function createPayPalProvider({ clientId, clientSecret, baseUrl }) {
           errors: i.errors ? (i.errors.name || i.errors.message) : null,
         })),
       };
+    },
+  
+    /**
+     * Verify a webhook delivery with PayPal. The raw request body is embedded verbatim so the
+     * signed payload is byte-identical (re-serialising parsed JSON can break verification).
+     */
+    async verifyWebhook({ headers, rawBody, webhookId }) {
+      const h = (k) => headers[k] ?? headers[k.toLowerCase()];
+      const fields = {
+        auth_algo: h('paypal-auth-algo'),
+        cert_url: h('paypal-cert-url'),
+        transmission_id: h('paypal-transmission-id'),
+        transmission_sig: h('paypal-transmission-sig'),
+        transmission_time: h('paypal-transmission-time'),
+        webhook_id: webhookId,
+      };
+      if (Object.values(fields).some((v) => typeof v !== 'string' || !v) || typeof rawBody !== 'string' || !rawBody) return false;
+      const body = `{${Object.entries(fields).map(([k, v]) => `${JSON.stringify(k)}:${JSON.stringify(v)}`).join(',')},"webhook_event":${rawBody}}`;
+      const j = await rest('POST', '/v1/notifications/verify-webhook-signature', body);
+      return j?.verification_status === 'SUCCESS';
+    },
+
+    /** Find the webhook registered for `url` on this REST app, or create it. Idempotent by URL. */
+    async ensureWebhook(url, eventTypes) {
+      const list = await rest('GET', '/v1/notifications/webhooks');
+      const existing = (list?.webhooks || []).find((w) => w.url === url);
+      if (existing) {
+        const have = new Set((existing.event_types || []).map((e) => e.name));
+        if (eventTypes.every((e) => have.has(e))) return { id: existing.id, created: false };
+        await rest('PATCH', `/v1/notifications/webhooks/${existing.id}`, [{ op: 'replace', path: '/event_types', value: eventTypes.map((name) => ({ name })) }]);
+        return { id: existing.id, created: false, updated: true };
+      }
+      const j = await rest('POST', '/v1/notifications/webhooks', { url, event_types: eventTypes.map((name) => ({ name })) });
+      return { id: j.id, created: true };
     },
   };
 }

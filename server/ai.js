@@ -4,7 +4,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { z } from 'zod';
-import { ZONE_DESCRIPTIONS } from './data/districts.js';
+import { ZONE_DESCRIPTIONS, buildDistricts } from './data/districts.js';
 
 const AI_TIMEOUT_MS = 60_000;
 
@@ -46,6 +46,8 @@ const SCRIPT_RANGES = {
   'Bengali-Assamese': /[ঀ-৿]/,
   Bengali: /[ঀ-৿]/,
   Devanagari: /[ऀ-ॿ]/,
+  Arabic: /[\u0600-\u06FF]/,
+  'Vietnamese Latin': /[ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỷỹỵ]/i,
 };
 
 const ASSESSMENT_SYSTEM = `You are the risk communication analyst for Floodgate, a forecast-triggered relief funding platform.
@@ -57,7 +59,7 @@ Write:
 - rationale: 2 to 4 plain sentences for donors, citing the actual numbers given (baseline, peak, ratio, threshold, peak date). No jargon, no exaggeration, no claims about real casualties.
 - zoneWeights: relative allocation weights for risk zones A, B and C (numbers between 0 and 10). These scale per-member household shares; the platform's code computes the actual amounts.
 - alertEnglish: a practical household alert of 30 words or fewer (hard limit: under 40 words).
-- alertLocal: the same alert in the district's local language, written in its native script. If the language is Maithili, write genuine Maithili (e.g. "मे", "क", "अछि"), not Hindi.
+- alertLocal: the same alert in the district's local language, written in its native script. If the language is Maithili, write genuine Maithili (e.g. "मे", "क", "अछि"), not Hindi. If it is Urdu, use Urdu in Arabic script. Use the official civil-protection vocabulary a resident would recognise.
 - responseSteps: 4 to 6 practical steps for the relief partner, each with title, startHourOffset (hours from now, may be negative only if already under way), durationHours and owner (a role such as "Relief partner field team", not a real organisation).
 
 Write plainly and concretely, like an experienced humanitarian analyst. No filler, hype or exclamation marks; do not mention AI, models or how this text was produced. If the data is labelled SCENARIO, open the rationale with "Under this scenario," and mention it no further; do not describe it as an observed flood. Do not prefix alerts with labels such as "Scenario warning".`;
@@ -65,8 +67,8 @@ Write plainly and concretely, like an experienced humanitarian analyst. No fille
 // ---------- Ask the Ledger ----------
 
 export const LEDGER_COLUMNS = {
-  type: { kind: 'text', values: ['Pledge', 'Authorization', 'Capture', 'Void', 'Payout batch', 'Payout item', 'Household allocation', 'Trigger', 'Release', 'Evaluation'] },
-  district: { kind: 'text', values: ['Guwahati', 'Majuli', 'Sylhet', 'Kurigram', 'Saptari', 'Darbhanga'] },
+  type: { kind: 'text', values: ['Pledge', 'Authorization', 'Capture', 'Void', 'Payout batch', 'Payout item', 'Household allocation', 'Trigger', 'Release', 'Evaluation', 'PayPal webhook'] },
+  district: { kind: 'text', values: buildDistricts().map((d) => d.shortName) },
   party: { kind: 'text' },
   status: { kind: 'text' },
   zone: { kind: 'text', values: ['A', 'B', 'C'] },
@@ -130,7 +132,7 @@ export function keywordLedgerQuery(question) {
   const filters = [];
   for (const d of LEDGER_COLUMNS.district.values) if (q.includes(d.toLowerCase())) filters.push({ column: 'district', operator: 'equals', value: d });
   const typeMap = [
-    ['household', 'Household allocation'], ['allocation', 'Household allocation'], ['payout item', 'Payout item'],
+    ['household', 'Household allocation'], ['allocation', 'Household allocation'], ['payout item', 'Payout item'], ['webhook', 'PayPal webhook'],
     ['payout', 'Payout batch'], ['pledge', 'Pledge'], ['authori', 'Authorization'], ['capture', 'Capture'], ['void', 'Void'],
   ];
   for (const [k, v] of typeMap) if (q.includes(k)) { filters.push({ column: 'type', operator: 'equals', value: v }); break; }
@@ -160,6 +162,13 @@ const LOCAL_TEMPLATES = {
   bn: (d) => `${d}-এর জন্য বন্যা সতর্কতা: নদীর পানি বাড়তে পারে। কাগজপত্র, খাবার ও গবাদিপশু উঁচু জায়গায় সরিয়ে নিন এবং স্থানীয় প্রশাসনের নির্দেশনা মেনে চলুন।`,
   ne: (d) => `${d}का लागि बाढी चेतावनी: नदीको पानी बढ्न सक्छ। कागजात, खाना र पशुधन अग्लो स्थानमा सार्नुहोस् र स्थानीय प्रशासनको निर्देशन पालना गर्नुहोस्।`,
   mai: (d) => `${d} लेल बाढ़िक चेतावनी: नदीक पानि बढ़ि सकैत अछि। कागजात, भोजन आ मवेशी ऊँच स्थान पर लऽ जाउ आ स्थानीय प्रशासनक निर्देशक पालन करू।`,
+  ur: (d) => `${d} کے لیے سیلاب کی وارننگ: دریا کا پانی بڑھ سکتا ہے۔ دستاویزات، خوراک اور مویشی اونچی جگہ پر منتقل کریں اور مقامی انتظامیہ کی ہدایات پر عمل کریں۔`,
+  vi: (d) => `Cảnh báo lũ cho ${d}: mực nước sông có thể dâng cao. Hãy đưa giấy tờ, lương thực và gia súc lên chỗ cao và làm theo hướng dẫn của chính quyền địa phương.`,
+  fil: (d) => `Babala sa baha para sa ${d}: maaaring tumaas ang tubig sa ilog. Ilipat ang mga dokumento, pagkain at alagang hayop sa mataas na lugar at sundin ang abiso ng lokal na pamahalaan.`,
+  ha: (d) => `Gargaɗin ambaliyar ruwa ga ${d}: ruwan kogi na iya tashi. Ku kai takardu, abinci da dabbobi wuri mai tsawo, kuma ku bi umarnin hukumomin yankin.`,
+  sw: (d) => `Tahadhari ya mafuriko kwa ${d}: maji ya mto yanaweza kupanda. Hamishia nyaraka, chakula na mifugo sehemu za juu na fuata maelekezo ya mamlaka za eneo.`,
+  pt: (d) => `Alerta de cheia para ${d}: o nível do rio pode subir. Leve documentos, alimentos e animais para um local alto e siga as orientações da Defesa Civil.`,
+  de: (d) => `Hochwasserwarnung für ${d}: Der Flusspegel kann stark ansteigen. Bringen Sie Dokumente, Vorräte und Haustiere in höhere Lagen und folgen Sie den Anweisungen der Behörden.`,
 };
 
 export function templateAssessment({ district, evaluation, simulated }) {
@@ -240,6 +249,7 @@ export function createAiService(aiConfig) {
         const strict = AssessmentStrict.safeParse(output);
         if (!strict.success) return { problem: strict.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ') };
         if (scriptRe && !scriptRe.test(strict.data.alertLocal)) return { problem: `alertLocal must be written in ${district.language.script} script` };
+        if (district.language.code !== 'en' && strict.data.alertLocal.trim().toLowerCase() === strict.data.alertEnglish.trim().toLowerCase()) return { problem: `alertLocal must be translated into ${district.language.name}` };
         return { data: strict.data };
       };
       const userMsg = `Assess this district.\n\n${JSON.stringify(payload)}`;

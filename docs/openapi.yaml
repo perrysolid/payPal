@@ -1,0 +1,253 @@
+openapi: 3.0.3
+info:
+  title: Floodgate API
+  version: 1.0.0
+  description: |
+    Forecast-triggered relief funding. Donors authorize PayPal holds per river district; when the
+    GloFAS discharge forecast crosses the district's danger threshold, holds are captured and paid
+    out to the district's relief partner, otherwise they are voided.
+
+    Payments run against the PayPal Sandbox. This specification is suitable for APIMatic
+    (SDK and portal generation) and other OpenAPI tooling.
+  license: { name: MIT, url: 'https://opensource.org/licenses/MIT' }
+security: []
+servers:
+  - url: https://floodgate-5udu.onrender.com
+    description: Hosted instance
+  - url: http://localhost:8787
+    description: Local development
+tags:
+  - { name: System, description: 'Health, configuration, state and reset' }
+  - { name: Districts, description: 'Forecasts, scenarios, trigger evaluation, release and payouts' }
+  - { name: Pledges, description: 'PayPal order creation and authorization holds' }
+  - { name: Ledger, description: 'Natural-language ledger queries' }
+  - { name: Webhooks, description: 'Verified PayPal webhook receiver' }
+paths:
+  /api/health:
+    get:
+      tags: [System]
+      operationId: getHealth
+      summary: Liveness check
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { ok: { type: boolean } } } } } }
+  /api/config:
+    get:
+      tags: [System]
+      operationId: getConfig
+      summary: Public client configuration (no secrets)
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Config' } } } }
+  /api/state:
+    get:
+      tags: [System]
+      operationId: getState
+      summary: Full snapshot of districts, pledges and ledger
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Snapshot' } } } }
+  /api/reset:
+    post:
+      tags: [System]
+      operationId: reset
+      summary: Clear application records and restore district data
+      description: Does not reverse completed PayPal transactions.
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { ok: { type: boolean }, note: { type: string } } } } } }
+  /api/districts/{id}/forecast:
+    get:
+      tags: [Districts]
+      operationId: getForecast
+      summary: Live GloFAS forecast and trigger evaluation for a district
+      parameters:
+        - $ref: '#/components/parameters/DistrictId'
+        - { name: refresh, in: query, required: false, schema: { type: string, enum: ['1'] }, description: Bypass the 30-minute cache }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ForecastView' } } } }
+        '404': { $ref: '#/components/responses/Error' }
+  /api/districts/{id}/scenario:
+    post:
+      tags: [Districts]
+      operationId: setScenario
+      summary: Apply or clear a modelled flood scenario on top of the live forecast
+      parameters: [ { $ref: '#/components/parameters/DistrictId' } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [active], properties: { active: { type: boolean } } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { district: { $ref: '#/components/schemas/District' }, forecast: { $ref: '#/components/schemas/ForecastView' } } } } } }
+        '409': { $ref: '#/components/responses/Error' }
+  /api/districts/{id}/evaluate:
+    post:
+      tags: [Districts]
+      operationId: evaluateDistrict
+      summary: Run the deterministic trigger; on trigger, capture holds and pay the relief partner
+      description: Idempotent. Repeat calls after a trigger return ALREADY_TRIGGERED and only re-check settlement.
+      parameters: [ { $ref: '#/components/parameters/DistrictId' } ]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  outcome: { type: string, enum: [TRIGGERED, BELOW_THRESHOLD, ALREADY_TRIGGERED, DATA_UNAVAILABLE] }
+                  evaluation: { $ref: '#/components/schemas/Evaluation' }
+                  issues: { type: array, items: { type: string } }
+                  district: { $ref: '#/components/schemas/District' }
+  /api/districts/{id}/release:
+    post:
+      tags: [Districts]
+      operationId: releaseDistrict
+      summary: Close the watch window and void all held authorizations for this district only
+      parameters: [ { $ref: '#/components/parameters/DistrictId' } ]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { outcome: { type: string }, failures: { type: array, items: { type: object } }, district: { $ref: '#/components/schemas/District' } } } } } }
+  /api/districts/{id}/payouts/refresh:
+    post:
+      tags: [Districts]
+      operationId: refreshPayouts
+      summary: Re-read payout batch and item status from PayPal
+      parameters: [ { $ref: '#/components/parameters/DistrictId' } ]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { district: { $ref: '#/components/schemas/District' } } } } } }
+  /api/pledges:
+    post:
+      tags: [Pledges]
+      operationId: createPledge
+      summary: Create a PayPal order with intent AUTHORIZE for a district
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [districtId, amount]
+              properties:
+                districtId: { $ref: '#/components/schemas/DistrictIdValue' }
+                amount: { type: string, pattern: '^\d{1,4}(\.\d{1,2})?$', example: '25.00', description: USD 1.00 to 1000.00 }
+                donorName: { type: string, maxLength: 60 }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { type: object, properties: { orderId: { type: string }, pledgeId: { type: string }, amount: { type: string }, currency: { type: string, enum: [USD] } } } } } }
+        '400': { $ref: '#/components/responses/Error' }
+  /api/pledges/{orderId}/authorize:
+    post:
+      tags: [Pledges]
+      operationId: authorizePledge
+      summary: Authorize an approved order, creating a hold (the donor is not charged)
+      description: Idempotent per order. Amount, currency and custom_id are verified against the pledge; a mismatched authorization is voided.
+      parameters:
+        - { name: orderId, in: path, required: true, schema: { type: string, pattern: '^[A-Za-z0-9-]{6,64}$' } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { idempotent: { type: boolean }, pledgeId: { type: string }, status: { type: string }, authorizationId: { type: string }, amount: { type: string }, currency: { type: string } } } } } }
+        '422': { $ref: '#/components/responses/Error' }
+  /api/ask:
+    post:
+      tags: [Ledger]
+      operationId: askLedger
+      summary: Translate a natural-language question into a validated ledger grid filter
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [question], properties: { question: { type: string, minLength: 1, maxLength: 300 } } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object, properties: { explanation: { type: string }, filterModel: { type: object, additionalProperties: true }, sort: { type: object, nullable: true }, rejected: { type: array, items: { type: string } } } } } } }
+  /api/webhooks/paypal:
+    post:
+      tags: [Webhooks]
+      operationId: receivePayPalWebhook
+      summary: PayPal webhook receiver
+      description: |
+        Every delivery is verified with PayPal's verify-webhook-signature API using the exact raw body
+        before it is applied. Redeliveries (same event id) are ignored. Payout events also trigger a
+        re-read of the batch from PayPal.
+      parameters:
+        - { name: PAYPAL-TRANSMISSION-ID, in: header, required: true, schema: { type: string } }
+        - { name: PAYPAL-TRANSMISSION-TIME, in: header, required: true, schema: { type: string } }
+        - { name: PAYPAL-TRANSMISSION-SIG, in: header, required: true, schema: { type: string } }
+        - { name: PAYPAL-CERT-URL, in: header, required: true, schema: { type: string } }
+        - { name: PAYPAL-AUTH-ALGO, in: header, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, properties: { id: { type: string }, event_type: { type: string }, resource: { type: object, additionalProperties: true } } } } }
+      responses:
+        '200': { description: Accepted }
+        '400': { $ref: '#/components/responses/Error' }
+        '503': { $ref: '#/components/responses/Error' }
+components:
+  parameters:
+    DistrictId:
+      name: id
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/DistrictIdValue' }
+  responses:
+    Error:
+      description: Error
+      content: { application/json: { schema: { type: object, properties: { error: { type: string }, debugId: { type: string } } } } }
+  schemas:
+    DistrictIdValue:
+      type: string
+      enum: [guwahati, majuli, sylhet, kurigram, saptari, darbhanga, sukkur, angiang, tuguegarao, lokoja, garissa, portoalegre, cologne]
+    Config:
+      type: object
+      properties:
+        paymentMode: { type: string, enum: [paypal, mock] }
+        paypalClientId: { type: string, nullable: true, description: Public client ID only }
+        paypalEnvironment: { type: string, nullable: true }
+        ai: { type: object, properties: { enabled: { type: boolean }, model: { type: string, nullable: true } } }
+        webhooks: { type: object, properties: { enabled: { type: boolean } } }
+        limits: { type: object, properties: { minPledge: { type: string }, maxPledge: { type: string }, currency: { type: string } } }
+        disclaimers: { type: array, items: { type: string } }
+    Evaluation:
+      type: object
+      properties:
+        valid: { type: boolean }
+        trigger: { type: boolean }
+        baseline: { type: number, description: 30-day median discharge (m³/s) }
+        peak: { type: number, description: 7-day forecast peak (m³/s) }
+        peakDate: { type: string, format: date }
+        ratio: { type: number }
+        threshold: { type: number }
+        issues: { type: array, items: { type: string } }
+    ForecastView:
+      type: object
+      properties:
+        live: { type: object, additionalProperties: true }
+        simulated: { type: object, nullable: true, additionalProperties: true }
+    District:
+      type: object
+      properties:
+        id: { $ref: '#/components/schemas/DistrictIdValue' }
+        name: { type: string }
+        area: { type: string, enum: ['South Asia', 'Southeast Asia', 'Africa', 'South America', 'Europe'] }
+        country: { type: string }
+        river: { type: string }
+        threshold: { type: number }
+        status: { type: string, enum: [WATCHING, TRIGGERED, RELEASED] }
+        totals: { type: object, additionalProperties: { type: integer }, description: Amounts in integer cents }
+        trigger: { type: object, nullable: true, additionalProperties: true }
+      additionalProperties: true
+    LedgerRow:
+      type: object
+      properties:
+        id: { type: string }
+        time: { type: string, format: date-time }
+        type: { type: string }
+        district: { type: string }
+        party: { type: string }
+        amount: { type: number, nullable: true }
+        currency: { type: string }
+        status: { type: string }
+        reference: { type: string }
+        scenario: { type: string, enum: [LIVE, SCENARIO, '—'] }
+        provider: { type: string }
+        zone: { type: string }
+        note: { type: string }
+    Snapshot:
+      type: object
+      properties:
+        seededAt: { type: string, format: date-time }
+        mode: { type: string }
+        districts: { type: array, items: { $ref: '#/components/schemas/District' } }
+        pledges: { type: array, items: { type: object, additionalProperties: true } }
+        ledger: { type: array, items: { $ref: '#/components/schemas/LedgerRow' } }
+        webhooks: { type: object, properties: { enabled: { type: boolean }, error: { type: string, nullable: true }, lastEventAt: { type: string, nullable: true }, received: { type: integer } } }

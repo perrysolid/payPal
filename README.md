@@ -4,7 +4,7 @@
 
 **Live app:** https://floodgate-5udu.onrender.com (Render free tier: the first request after idle can take about 50 seconds; restarts clear in-memory records.)
 
-Floodgate is a forecast-triggered relief funding platform for flood-prone districts in South Asia. Donors pledge to a district with a PayPal **authorization** (a hold, not a charge). Floodgate watches the GloFAS river-discharge forecast. If a deterministic engine sees the forecast cross the district's danger threshold, the held pledges are **captured** and a **PayPal Payout** goes to the district's relief partner. Claude then explains the risk in plain language and in the local script. If the watch window closes without a trigger, the holds are **voided** and nobody is charged.
+Floodgate is a forecast-triggered relief funding platform for flood-prone river districts worldwide: 13 districts in 10 countries across South Asia, Southeast Asia, Africa, South America and Europe. Donors pledge to a district with a PayPal **authorization** (a hold, not a charge). Floodgate watches the GloFAS river-discharge forecast. If a deterministic engine sees the forecast cross the district's danger threshold, the held pledges are **captured** and a **PayPal Payout** goes to the district's relief partner. Claude then explains the risk in plain language and in the local script. If the watch window closes without a trigger, the holds are **voided** and nobody is charged.
 
 > **Sandbox demonstration.** Every financial transaction runs in the PayPal Sandbox and no real money moves. Relief partners, payout emails and households are fictional **SAMPLE DATA**. Replay scenarios are synthetic and are never real forecasts. See [Limitations and disclaimers](#16-limitations-and-regulatory-disclaimers).
 
@@ -23,9 +23,9 @@ The UI keeps five states apart: **authorization** (held, not charged), **capture
 
 ## 2. Problem and target users
 
-Flood forecasts for the Brahmaputra, Surma and Koshi basins often arrive days before the water does, but relief money usually arrives after the damage. Diaspora donors want to help their home districts but do not know when to give and cannot see where their money goes.
+Flood forecasts for rivers such as the Brahmaputra, Indus, Mekong, Niger and Rhine often arrive days before the water does, but relief money usually arrives after the damage. Diaspora donors want to help their home districts but do not know when to give and cannot see where their money goes.
 
-- **Donors**, especially diaspora communities from Assam, Bihar, Nepal and Bangladesh, who want to commit funds in advance and pay only if the risk materialises.
+- **Donors**, especially diaspora communities from flood-prone regions (Assam, Bangladesh, Sindh, the Mekong Delta, Kogi, Rio Grande do Sul and others), who want to commit funds in advance and pay only if the risk materialises.
 - **Relief partners**, who need money to arrive *before* the flood peak, plus a clear allocation plan.
 - **Judges and auditors**, who need to see every cent: held, captured, paid out and allocated.
 
@@ -84,7 +84,8 @@ One deployable service: in production Express serves the built React app from `d
 | Capture on trigger (`final_capture: true`) | `PaymentsController.captureAuthorizedPayment` | `server/payments/paypal.js` |
 | Void on release | `PaymentsController.voidPayment` | `server/payments/paypal.js` |
 | Payout to relief partner | `POST /v1/payments/payouts` (REST, OAuth client credentials) | `server/payments/paypal.js` |
-| Payout status polling | `GET /v1/payments/payouts/{batch_id}` every 10 s | `server/engine.js` → `refreshPayouts` |
+| Payout status webhooks | `POST /api/webhooks/paypal`, each delivery verified with `POST /v1/notifications/verify-webhook-signature` (raw body embedded verbatim); webhook registered idempotently via `/v1/notifications/webhooks` at startup | `server/index.js`, `server/payments/paypal.js`, `server/engine.js` → `applyWebhookEvent` |
+| Payout status polling (fallback) | `GET /v1/payments/payouts/{batch_id}`: every 10 s without webhooks, every 60 s with them, and on every payout webhook | `server/engine.js` → `refreshPayouts` |
 
 **Server-side checks.** The browser sends only a district ID, an amount string and an optional display name. The server validates the district, enforces USD 1.00 to 1,000.00, stores the pledge, and later checks that PayPal's authorization amount, currency and `custom_id` match what it stored. A mismatched authorization is voided and rejected.
 
@@ -108,7 +109,7 @@ One deployable service: in production Express serves the built React app from `d
 **Claude does:**
 
 - explain the flood risk to donors in 2 to 4 sentences, citing the real numbers
-- write a household alert in English (under 40 words) and in the local language and native script (Assamese, Bengali, Nepali, Maithili)
+- write a household alert in English (under 40 words) and in the local language and native script (Assamese, Bengali, Nepali, Maithili, Urdu, Vietnamese, Filipino, Hausa, Swahili, Portuguese, German). Native scripts are checked (Bengali-Assamese, Devanagari, Arabic, Vietnamese diacritics), and Latin-script alerts must differ from the English text. Urdu renders right to left
 - suggest relative allocation weights for risk zones A, B and C
 - draft a 4 to 6 step response timeline for the relief partner
 - turn plain-English ledger questions into grid filters (**Ask the Ledger**)
@@ -138,7 +139,9 @@ How the boundary is enforced (`server/ai.js`):
 
 ## 9. APIMatic-generated SDK
 
-`@paypal/paypal-server-sdk` is PayPal's official server SDK, generated with APIMatic. Floodgate uses its `Client`, `OrdersController` (`createOrder`, `authorizeOrder`) and `PaymentsController` (`captureAuthorizedPayment`, `voidPayment`), its typed models (`CheckoutPaymentIntent.Authorize`, camelCase request bodies) and its `ApiError` handling. Version 2.5.0 of the SDK does not include Payouts, so Payouts uses the REST API directly with an OAuth client-credentials token.
+`@paypal/paypal-server-sdk` is PayPal's official server SDK, generated with APIMatic. Floodgate uses its `Client`, `OrdersController` (`createOrder`, `authorizeOrder`) and `PaymentsController` (`captureAuthorizedPayment`, `voidPayment`), its typed models (`CheckoutPaymentIntent.Authorize`, camelCase request bodies) and its `ApiError` handling. Version 2.5.0 of the SDK does not include Payouts or webhook management, so those use the REST API directly with an OAuth client-credentials token.
+
+Floodgate also publishes its own API as an OpenAPI 3 specification: [`docs/openapi.yaml`](docs/openapi.yaml), served at `/api/openapi.yaml`. It validates with Redocly CLI and can be imported into APIMatic to generate client SDKs and an API portal for partners who want to integrate pledges or ledger data.
 
 ## 10. Render deployment
 
@@ -179,7 +182,7 @@ npm run build && npm start  # production build served on :8787
 
 ## 13. Demo instructions (about 2 minutes)
 
-1. Open Floodgate. Six district cards show live peak-to-median ratios. In November all six are well below 1.8×, because it is after the monsoon.
+1. Open Floodgate. Thirteen district cards show live peak-to-median ratios; filter them by region. Most South Asian basins are well below 1.8× in November (after the monsoon), while rivers in their rainy season can be higher. On 12 November 2026 the live GloFAS forecast put Garissa (Tana River, Kenya) at 2.34×, above its threshold, with no scenario applied.
 2. Select **Sylhet**. The chart shows 30 days of observed discharge, the live 7-day forecast, the median baseline and the danger line.
 3. Choose **$25** and approve with the PayPal Sandbox personal account. The pledge becomes an **authorization**: held, not charged.
 4. Click **Run flood scenario**. A purple, hatched surge labelled **Scenario** appears. The live forecast line is unchanged.
@@ -189,11 +192,21 @@ npm run build && npm start  # production build served on :8787
 8. Check the household allocation table. The total reconciles exactly to the captured amount.
 9. Scroll to the **Financial ledger**. Ask "Show unpaid pledges in zone B in Sylhet", toggle **Group by district** and export CSV.
 10. Optionally pledge to Kurigram and click **Release** to see a void. Sylhet is unaffected.
-11. Click **Reset demo** to start again. This clears application records only; it does not reverse Sandbox transactions.
+11. Click **Reset** to start again. This clears application records only; it does not reverse Sandbox transactions.
 
 ## 14. Sample data
 
-`server/data/districts.js` seeds six districts: Guwahati (Kamrup Metro) and Majuli (Assam, Brahmaputra), Sylhet (Bangladesh, Surma), Kurigram (Bangladesh, Brahmaputra-Jamuna), Saptari (Nepal, Koshi) and Darbhanga (Bihar, Kosi). Each has coordinates, a local language, a reference discharge, a 1.8× threshold, a relief partner, a payout email and 12 households across risk zones A, B and C with member counts. **Every partner, email and household is fictional**. There is no NGO partnership, government affiliation or verified beneficiary behind any of them.
+`server/data/districts.js` seeds 13 districts:
+
+| Region | Districts |
+|---|---|
+| South Asia | Guwahati and Majuli (Assam, Brahmaputra), Sylhet (Bangladesh, Surma), Kurigram (Bangladesh, Brahmaputra-Jamuna), Saptari (Nepal, Koshi), Darbhanga (Bihar, Kosi), Sukkur (Pakistan, Indus) |
+| Southeast Asia | An Giang / Tân Châu (Vietnam, Mekong), Tuguegarao (Philippines, Cagayan) |
+| Africa | Lokoja (Nigeria, Niger-Benue confluence), Garissa (Kenya, Tana) |
+| South America | Porto Alegre (Brazil, Guaíba) |
+| Europe | Cologne (Germany, Rhine) |
+
+Candidate coordinates for the new districts were checked against the Open-Meteo flood API by grid search, keeping the main-channel cell. Each has coordinates, a local language, a reference discharge, a 1.8× threshold, a relief partner, a payout email and 12 households across risk zones A, B and C with member counts. **Every partner, email and household is fictional**. There is no NGO partnership, government affiliation or verified beneficiary behind any of them.
 
 Open-Meteo snaps coordinates to the nearest river grid cell, so each district has several candidate coordinates along the main channel. On first load Floodgate probes them all and keeps the cell with the largest valid 30-day median discharge. The chosen grid cell is shown under the chart.
 
@@ -204,13 +217,13 @@ Because forecasts after the monsoon do not cross thresholds, **Run flood scenari
 ## 16. Limitations and regulatory disclaimers
 
 - **Sandbox only.** No real money moves. All PayPal objects are Sandbox objects.
-- **PayPal availability is limited in parts of the target region.** For example, PayPal cannot receive domestic payments in Bangladesh, and India and Nepal have restrictions. For that reason payouts go to **registered relief partners**, never to households.
+- **PayPal availability varies by country.** For example, PayPal cannot receive domestic payments in Bangladesh or Pakistan, and India, Nepal and Nigeria have restrictions. For that reason payouts go to **registered relief partners**, never to households.
 - **Household amounts are allocation-ledger entries**, not PayPal transfers. They are instructions to the relief partner.
 - **A PayPal authorization is not escrow.** It is a temporary hold on the donor's funding source (generally honoured for 3 days and valid for up to 29 days). Floodgate does not claim regulated escrow. A real deployment would need reauthorization or a different instrument for watch windows longer than the honour period.
 - **Payouts** require a Payouts-enabled business account. Items sent to non-PayPal emails become `UNCLAIMED`, and Floodgate shows that status as reported.
 - **In-memory state.** A restart clears records. There is no database or authentication; this is a hackathon prototype.
 - **Forecasts** come from GloFAS via Open-Meteo. They are modelled discharge, not official warnings. Floodgate is not a warning service and does not replace guidance from national hydrological agencies.
-- Webhook signature verification is **not implemented**. Payout status comes from polling.
+- **Webhooks** are registered automatically when the server knows its public HTTPS URL (`RENDER_EXTERNAL_URL` on Render, or `PUBLIC_BASE_URL`; `PAYPAL_WEBHOOK_ID` overrides discovery). Locally, without a public URL, Floodgate falls back to polling. Polling continues as a backstop either way.
 
 ## 17. License
 

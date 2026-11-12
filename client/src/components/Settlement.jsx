@@ -6,7 +6,7 @@ const ITEM_LABEL = {
   FAILED: 'Failed', RETURNED: 'Returned', BLOCKED: 'Blocked', REFUNDED: 'Refunded', REVERSED: 'Reversed', NOT_SUBMITTED: 'Not submitted',
 };
 
-export default function Settlement({ district: d, pledges, onRefresh, busy }) {
+export default function Settlement({ district: d, webhooks, pledges, onRefresh, busy }) {
   const t = d.trigger;
   if (!t && !d.release) return null;
 
@@ -43,6 +43,12 @@ export default function Settlement({ district: d, pledges, onRefresh, busy }) {
         <button type="button" className="btn secondary" style={{ width: 'auto', padding: '5px 12px', fontSize: 12.5 }} onClick={onRefresh} disabled={busy}>
           {busy ? <span className="spinner" /> : null}Refresh payout status
         </button>
+      </div>
+      <div className="wh-line" style={{ borderTop: 'none', borderBottom: '1px solid var(--line-2)' }}>
+        <span className={`wh-dot ${webhooks?.enabled ? '' : 'off'}`} />
+        {webhooks?.enabled
+          ? <span>Payout status from verified PayPal webhooks{t.payouts.at(-1)?.lastWebhookAt ? ` · last event ${t.payouts.at(-1).lastWebhookType} at ${time(t.payouts.at(-1).lastWebhookAt)}` : ' · waiting for the first event'}; PayPal is re-queried on each event.</span>
+          : <span>Payout status is checked with PayPal every 10 seconds.</span>}
       </div>
       <div className="flow">
         <div className="flow-step">
