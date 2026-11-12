@@ -56,8 +56,8 @@ Write:
 - severity: "watch" if the deterministic verdict is no trigger; "warning" or "severe" if triggered (severe when the ratio is well above threshold or the peak is imminent).
 - rationale: 2 to 4 plain sentences for donors, citing the actual numbers given (baseline, peak, ratio, threshold, peak date). No jargon, no exaggeration, no claims about real casualties.
 - zoneWeights: relative allocation weights for risk zones A, B and C (numbers between 0 and 10). These scale per-member household shares; the platform's code computes the actual amounts.
-- alertEnglish: a practical household alert under 40 words.
-- alertLocal: the same alert in the district's local language, written in its native script.
+- alertEnglish: a practical household alert of 30 words or fewer (hard limit: under 40 words).
+- alertLocal: the same alert in the district's local language, written in its native script. If the language is Maithili, write genuine Maithili (e.g. "मे", "क", "अछि"), not Hindi.
 - responseSteps: 4 to 6 practical steps for the relief partner, each with title, startHourOffset (hours from now, may be negative only if already under way), durationHours and owner (a role such as "Relief partner field team", not a real organisation).
 
 If the data is marked SIMULATED, treat it as a drill: say so plainly in the rationale ("In this simulated scenario..."). Never present simulated data as a real flood.`;
@@ -235,17 +235,27 @@ export function createAiService(aiConfig) {
       households: { byZone: zoneCounts, membersByZone: zoneMembers, zoneDescriptions: ZONE_DESCRIPTIONS, note: 'SAMPLE DATA' },
     };
     try {
-      const { output, model: servedBy } = await structuredCall({
-        system: ASSESSMENT_SYSTEM,
-        user: `Assess this district.\n\n${JSON.stringify(payload)}`,
-        schema: AssessmentWire,
-        effort: 'low',
-        maxTokens: 6000,
-      });
-      const strict = AssessmentStrict.safeParse(output);
-      if (!strict.success) return fallback(`Claude output failed validation: ${strict.error.issues[0]?.message}`);
       const scriptRe = SCRIPT_RANGES[district.language.script];
-      if (scriptRe && !scriptRe.test(strict.data.alertLocal)) return fallback('Claude local alert was not in the expected script');
+      const check = (output) => {
+        const strict = AssessmentStrict.safeParse(output);
+        if (!strict.success) return { problem: strict.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ') };
+        if (scriptRe && !scriptRe.test(strict.data.alertLocal)) return { problem: `alertLocal must be written in ${district.language.script} script` };
+        return { data: strict.data };
+      };
+      const userMsg = `Assess this district.\n\n${JSON.stringify(payload)}`;
+      let { output, model: servedBy } = await structuredCall({ system: ASSESSMENT_SYSTEM, user: userMsg, schema: AssessmentWire, effort: 'low', maxTokens: 6000 });
+      let result = check(output);
+      if (!result.data) {
+        // One corrective retry; the output is validated again and never trusted blindly.
+        ({ output, model: servedBy } = await structuredCall({
+          system: ASSESSMENT_SYSTEM,
+          user: `${userMsg}\n\nYour previous answer failed validation (${result.problem}). Produce a corrected assessment that satisfies every constraint.`,
+          schema: AssessmentWire, effort: 'low', maxTokens: 6000,
+        }));
+        result = check(output);
+      }
+      if (!result.data) return fallback(`Claude output failed validation: ${result.problem}`);
+      const strict = { data: result.data };
       // The model's severity is advisory; it must agree with the deterministic verdict.
       let severity = strict.data.severity;
       if (!evaluation.trigger) severity = 'watch';
