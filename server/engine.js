@@ -2,7 +2,7 @@
 // All money is integer cents. Every state change goes through `transition`, and every
 // district-level operation runs under a per-district lock so concurrent or repeated
 // requests cannot double-capture, double-void or double-trigger.
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { buildDistricts } from './data/districts.js';
 import { centsToString, parseAmountToCents, sumCents } from './money.js';
 import { computeTrigger, applyReplaySurge } from './forecast.js';
@@ -42,6 +42,41 @@ function transition(pledge, to) {
   pledge.updatedAt = new Date().toISOString();
 }
 
+// ---------------- Direct-aid rules (public, locked per campaign) ----------------
+export const AID_RULES = {
+  capPerHouseholdCents: 10_000,      // USD 100 per household per campaign
+  firstPartShare: 0.5,               // 50% paid immediately
+  reviewHoldHours: Number(process.env.REVIEW_HOLD_HOURS || 48), // second 50% after review
+  registrationHours: 72,             // registration window after a trigger
+  minPayoutCents: 100,
+  clusterLimit: 3,                   // more than 3 registrations within ~100 m are held for review
+  districtRadiusKm: 60,
+};
+
+// Countries whose PayPal accounts can receive Payouts, per PayPal's Payouts country table
+// (developer.paypal.com/payouts/supported-features). Countries absent from that table are not paid.
+export const PAYOUT_COUNTRIES = new Set([
+  'India', 'Indonesia', 'Philippines', 'Vietnam', 'Malaysia', 'China', 'Japan', 'Mexico', 'Colombia', 'Brazil', 'Peru',
+  'Guatemala', 'Honduras', 'Dominican Republic', 'Jamaica', 'United States', 'Kenya', 'Mozambique', 'South Africa',
+  'Germany', 'Italy', 'Spain', 'Greece', 'Turkey', 'Australia',
+]);
+
+export function distanceKm(aLat, aLon, bLat, bLon) {
+  const R = 6371;
+  const toR = (x) => (x * Math.PI) / 180;
+  const dLat = toR(bLat - aLat);
+  const dLon = toR(bLon - aLon);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(toR(aLat)) * Math.cos(toR(bLat)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+export const COUNTRY_CODES = {
+  India: 'IN', Bangladesh: 'BD', Nepal: 'NP', Pakistan: 'PK', Vietnam: 'VN', Philippines: 'PH', Nigeria: 'NG',
+  Kenya: 'KE', Brazil: 'BR', Germany: 'DE', Mexico: 'MX', China: 'CN', 'United States': 'US', Panama: 'PA', Vanuatu: 'VU', Japan: 'JP', Indonesia: 'ID',
+};
+
+const anonId = (subject) => `R-${createHash('sha256').update(`floodgate:${subject}`).digest('hex').slice(0, 8).toUpperCase()}`;
+
 const shortId = () => randomUUID().replace(/-/g, '').slice(0, 10).toUpperCase();
 const nowIso = () => new Date().toISOString();
 
@@ -78,10 +113,16 @@ export function createEngine({ providerFactory, forecast, ai, config, log = cons
         ...d,
         status: 'WATCHING',
         watchEndsAt: new Date(seededAt + WATCH_WINDOW_MS).toISOString(),
+        kind: 'forecast',
+        countryCode: COUNTRY_CODES[d.country] || null,
+        hazard: 'flood',
+        radiusKm: AID_RULES.districtRadiusKm,
+        payoutsSupported: PAYOUT_COUNTRIES.has(d.country),
         scenario: null,
         lastEvaluation: null,
         trigger: null,
         release: null,
+        registrants: [],
       }])),
       pledges: new Map(),
       orderIndex: new Map(),
@@ -123,7 +164,7 @@ export function createEngine({ providerFactory, forecast, ai, config, log = cons
 
   async function createPledge({ districtId, amount, donorName }) {
     const d = getDistrict(districtId);
-    if (d.status !== 'WATCHING') throw new HttpError(409, `${d.shortName} is ${d.status.toLowerCase()}; new pledges are closed for this watch window.`);
+    if (d.status === 'RELEASED') throw new HttpError(409, `${d.shortName} was released; new pledges are closed for this watch window.`);
     let amountCents;
     try { amountCents = parseAmountToCents(String(amount)); } catch (e) { throw new HttpError(400, e.message); }
     if (amountCents < MIN_PLEDGE_CENTS || amountCents > MAX_PLEDGE_CENTS) {
@@ -135,7 +176,7 @@ export function createEngine({ providerFactory, forecast, ai, config, log = cons
       amount: centsToString(amountCents),
       districtId: d.id,
       referenceId: id,
-      description: `Floodgate conditional relief pledge for ${d.name}, ${d.country}`,
+      description: d.status === 'TRIGGERED' ? `Floodgate direct aid donation for ${d.name}` : `Floodgate conditional relief pledge for ${d.name}, ${d.country}`,
       requestId: `fg-order-${id}`,
     });
     const pledge = {
@@ -170,7 +211,7 @@ export function createEngine({ providerFactory, forecast, ai, config, log = cons
       }
       if (p.status !== 'CREATED') throw new HttpError(409, `Pledge is ${p.status}; it cannot be authorized.`);
       const d = getDistrict(p.districtId);
-      if (d.status !== 'WATCHING') throw new HttpError(409, `${d.shortName} is no longer accepting pledges.`);
+      if (d.status === 'RELEASED') throw new HttpError(409, `${d.shortName} is no longer accepting pledges.`);
       transition(p, 'AUTHORIZING');
       let res;
       try {
@@ -206,6 +247,8 @@ export function createEngine({ providerFactory, forecast, ai, config, log = cons
         throw new HttpError(422, `Authorization rejected: ${problems.join('; ')}`);
       }
       transition(p, 'AUTHORIZED');
+      // After a trigger (or for a live event) the pool is already open: capture immediately.
+      if (d.status === 'TRIGGERED' && d.trigger) await settle(d);
       return { pledge: p, idempotent: false };
     });
   }
@@ -267,8 +310,10 @@ export function createEngine({ providerFactory, forecast, ai, config, log = cons
         assessment: null,
         allocations: [],
         payouts: [],
+        rounds: [],
         captureFailures: 0,
         settlement: 'CAPTURING',
+        registrationClosesAt: new Date(Date.now() + AID_RULES.registrationHours * 3600_000).toISOString(),
       };
       d.lastEvaluation = { at: d.trigger.at, simulated: isSim, valid: true, evaluation, assessment: null, heldCents };
 
@@ -314,6 +359,10 @@ export function createEngine({ providerFactory, forecast, ai, config, log = cons
     return sumCents(pledgesFor(d.id).filter((p) => p.status === 'CAPTURED' && p.triggerId === d.trigger.id).map((p) => p.capture.amountCents));
   }
 
+  function committedCents(d) {
+    return sumCents((d.registrants || []).map((r) => r.entitlementCents || 0));
+  }
+
   /** Idempotent settlement: capture leftovers, recompute allocations, create payouts for any uncovered captured funds. */
   async function settle(d) {
     const t = d.trigger;
@@ -322,49 +371,12 @@ export function createEngine({ providerFactory, forecast, ai, config, log = cons
     const captured = capturedCentsFor(d);
     t.capturedCents = captured;
 
-    const weights = t.assessment?.zoneWeights ?? { A: 1, B: 1, C: 1 };
-    t.allocations = captured > 0 ? computeAllocations(d.households, weights, captured) : [];
-    t.allocationTotalCents = sumCents(t.allocations.map((a) => a.amountCents));
-    if (t.allocationTotalCents !== captured) throw new Error('Invariant violated: allocations do not reconcile to captured funds');
-
     // Retry a payout batch whose create request failed, using the same sender_batch_id.
     for (const b of t.payouts.filter((x) => x.createState === 'REQUEST_FAILED')) await submitPayout(d, b);
-
-    const reserved = sumCents(t.payouts.map((b) => b.amountCents));
-    const remaining = captured - reserved;
-    if (remaining < 0) throw new Error('Invariant violated: payouts exceed captured funds');
-    if (remaining > 0) {
-      const n = t.payouts.length + 1;
-      const senderBatchId = `FG-${d.id.toUpperCase()}-${t.id}-${n}`;
-      const receiver = config.payoutRecipientOverride || d.partner.email;
-      const batch = {
-        senderBatchId,
-        amountCents: remaining,
-        createState: 'REQUESTED',
-        payoutBatchId: null,
-        batchStatus: null,
-        simulated: t.simulated,
-        items: [{
-          senderItemId: `${senderBatchId}-P1`,
-          receiver,
-          partnerName: d.partner.name,
-          amountCents: remaining,
-          payoutItemId: null,
-          status: 'NOT_SUBMITTED',
-          errors: null,
-          updatedAt: nowIso(),
-        }],
-        error: null,
-        createdAt: nowIso(),
-        updatedAt: nowIso(),
-      };
-      if (sumCents([reserved, batch.amountCents]) > captured) throw new Error('Invariant violated: payout would exceed captured funds');
-      t.payouts.push(batch);
-      await submitPayout(d, batch);
-    }
+    if (committedCents(d) > captured) throw new Error('Invariant violated: aid commitments exceed captured funds');
     const failedCaptures = pledgesFor(d.id).filter((p) => p.status === 'AUTHORIZED').length;
     const failedPayouts = t.payouts.filter((b) => b.createState === 'REQUEST_FAILED').length;
-    t.settlement = failedCaptures || failedPayouts ? 'NEEDS_RETRY' : captured === 0 ? 'NOTHING_CAPTURED' : 'PAYOUT_INITIATED';
+    t.settlement = failedCaptures || failedPayouts ? 'NEEDS_RETRY' : captured === 0 ? 'AWAITING_FUNDS' : 'FUNDED';
   }
 
   async function submitPayout(d, batch) {
@@ -373,13 +385,13 @@ export function createEngine({ providerFactory, forecast, ai, config, log = cons
     try {
       const res = await provider.createPayout({
         senderBatchId: batch.senderBatchId,
-        emailSubject: `Floodgate relief disbursement: ${d.shortName}${sim}`,
-        emailMessage: `Relief disbursement for ${d.name}. Please distribute according to the Floodgate household allocation ledger.${sim}`,
+        emailSubject: `Floodgate direct aid: ${d.shortName}${sim}`,
+        emailMessage: `Direct aid for households registered in ${d.name}. Paid by Floodgate under the published campaign rules.${sim}`,
         items: batch.items.map((i) => ({
           senderItemId: i.senderItemId,
           receiver: i.receiver,
           amount: centsToString(i.amountCents),
-          note: `Floodgate ${d.shortName} trigger ${t.id}${sim}. Distribute per allocation ledger.`,
+          note: i.note || `Floodgate ${d.shortName} trigger ${t.id}${sim}.`,
         })),
       });
       batch.createState = 'CREATED';
@@ -397,6 +409,175 @@ export function createEngine({ providerFactory, forecast, ai, config, log = cons
   }
 
   const TERMINAL_BATCH = ['SUCCESS', 'DENIED', 'CANCELED'];
+
+  // ---------------- Direct aid: registration ----------------
+  function registrationState(d) {
+    if (d.status === 'RELEASED') return { open: false, reason: 'This campaign was released; no aid is being paid.' };
+    if (!d.payoutsSupported) return { open: false, reason: `PayPal Payouts cannot pay recipients in ${d.country}, so direct aid is not available here.` };
+    if (d.status === 'TRIGGERED' && d.trigger?.registrationClosesAt && Date.parse(d.trigger.registrationClosesAt) < Date.now()) {
+      return { open: false, reason: 'The registration window has closed.' };
+    }
+    return { open: true, reason: d.status === 'TRIGGERED' ? 'Registration is open.' : 'Pre-registration is open for this season.' };
+  }
+
+  /**
+   * Register an affected household. Identity comes from Log in with PayPal (verified account);
+   * location from the device. Every rule here is published on the campaign's rules card.
+   */
+  async function registerRecipient({ districtId, identity, location, householdSize }) {
+    const d = getDistrict(districtId);
+    return withLock(`district:${d.id}`, async () => {
+      const st = registrationState(d);
+      if (!st.open) throw new HttpError(409, st.reason);
+      if (!identity?.subject || !identity.email) throw new HttpError(401, 'Sign in with PayPal first.');
+      if (!identity.verified) throw new HttpError(422, 'Only verified PayPal accounts can register. Verify your PayPal account and try again.');
+      const size = Number(householdSize);
+      if (!Number.isInteger(size) || size < 1 || size > 15) throw new HttpError(400, 'Household size must be between 1 and 15.');
+      const lat = Number(location?.lat); const lon = Number(location?.lon);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) throw new HttpError(400, 'A valid location is required.');
+      const id = anonId(identity.subject);
+      if (d.registrants.some((r) => r.id === id)) throw new HttpError(409, 'This PayPal account is already registered for this campaign.');
+      const dist = distanceKm(d.lat, d.lon, lat, lon);
+      if (dist > d.radiusKm) throw new HttpError(422, `Your location is ${Math.round(dist)} km from ${d.shortName}; this campaign covers ${d.radiusKm} km.`);
+      const sandbox = provider.mode !== 'paypal' || identity.sandbox;
+      const flags = [];
+      if (location.source === 'manual') {
+        if (!sandbox) throw new HttpError(422, 'Device location is required.');
+        flags.push('MANUAL_LOCATION_SANDBOX');
+      }
+      if (identity.country && identity.country !== d.countryCode) {
+        if (!sandbox) throw new HttpError(422, 'Your PayPal account country does not match this campaign.');
+        flags.push('COUNTRY_MISMATCH_SANDBOX');
+      }
+      const near = d.registrants.filter((r) => distanceKm(r.lat, r.lon, lat, lon) < 0.1).length;
+      if (near >= AID_RULES.clusterLimit) flags.push('LOCATION_CLUSTER');
+      const blocking = flags.filter((f) => !f.endsWith('_SANDBOX'));
+      const r = {
+        id, subject: identity.subject, email: identity.email, verified: true, accountCountry: identity.country || null,
+        householdSize: size, lat, lon, distanceKm: Math.round(dist * 10) / 10, locationSource: location.source === 'manual' ? 'manual' : 'device',
+        flags, status: blocking.length ? 'REVIEW' : 'ELIGIBLE', registeredAt: nowIso(),
+        entitlementCents: 0, part1Cents: 0, part2Cents: 0, part2DueAt: null, part2Paid: false, round: null,
+      };
+      d.registrants.push(r);
+      return r;
+    });
+  }
+
+  // ---------------- Direct aid: disbursement rounds ----------------
+  function aidSummary(d) {
+    const captured = d.trigger ? capturedCentsFor(d) : 0;
+    const committed = committedCents(d);
+    const paid = d.trigger ? sumCents(d.trigger.payouts.filter((b) => b.createState === 'CREATED').map((b) => b.amountCents)) : 0;
+    const completed = d.trigger ? sumCents(d.trigger.payouts.flatMap((b) => b.items).filter((i) => i.status === 'SUCCESS').map((i) => i.amountCents)) : 0;
+    return {
+      capturedCents: captured,
+      committedCents: committed,
+      reservedForReviewCents: committed - paid,
+      availableCents: captured - committed,
+      paidCents: paid,
+      completedCents: completed,
+      registrants: d.registrants.length,
+      eligibleUnpaid: d.registrants.filter((r) => r.status === 'ELIGIBLE' && !r.entitlementCents).length,
+    };
+  }
+
+  async function disburseRound(districtId) {
+    const d = getDistrict(districtId);
+    return withLock(`district:${d.id}`, async () => {
+      const t = d.trigger;
+      if (d.status !== 'TRIGGERED' || !t) throw new HttpError(409, 'Aid is paid only after the campaign has triggered.');
+      await settle(d);
+      const captured = capturedCentsFor(d);
+      const available = captured - committedCents(d);
+      const eligible = d.registrants.filter((r) => r.status === 'ELIGIBLE' && !r.entitlementCents);
+      if (!eligible.length) throw new HttpError(409, 'No newly verified households are waiting for a payment.');
+      const per = Math.min(AID_RULES.capPerHouseholdCents, Math.floor(available / eligible.length));
+      if (per < AID_RULES.minPayoutCents) throw new HttpError(409, `Not enough unallocated funds (${centsToString(available)} USD) for ${eligible.length} household(s).`);
+      const part1 = Math.floor(per * AID_RULES.firstPartShare);
+      const roundNo = t.rounds.length + 1;
+      const dueAt = new Date(Date.now() + AID_RULES.reviewHoldHours * 3600_000).toISOString();
+      for (const r of eligible) {
+        r.entitlementCents = per; r.part1Cents = part1; r.part2Cents = per - part1; r.part2DueAt = dueAt; r.round = roundNo;
+      }
+      if (committedCents(d) > captured) throw new Error('Invariant violated: aid commitments exceed captured funds');
+      const batch = makeBatch(d, `R${roundNo}A`, eligible.map((r) => ({ r, cents: r.part1Cents, part: 1 })));
+      t.rounds.push({ no: roundNo, at: nowIso(), households: eligible.length, perHouseholdCents: per, part1Cents: part1, part2DueAt: dueAt, batchId: batch.senderBatchId });
+      await submitPayout(d, batch);
+      return { round: t.rounds.at(-1), summary: aidSummary(d) };
+    });
+  }
+
+  async function releaseSecondParts(districtId) {
+    const d = getDistrict(districtId);
+    return withLock(`district:${d.id}`, async () => {
+      const t = d.trigger;
+      if (!t) throw new HttpError(409, 'Nothing to release.');
+      const due = d.registrants.filter((r) => r.entitlementCents && !r.part2Paid && r.status === 'ELIGIBLE' && Date.parse(r.part2DueAt) <= Date.now());
+      if (!due.length) throw new HttpError(409, 'No second payments are due yet; they are released after the review period.');
+      const batch = makeBatch(d, `R${t.rounds.length}B-${t.payouts.length + 1}`, due.map((r) => ({ r, cents: r.part2Cents, part: 2 })));
+      due.forEach((r) => { r.part2Paid = true; });
+      await submitPayout(d, batch);
+      return { summary: aidSummary(d) };
+    });
+  }
+
+  function makeBatch(d, tag, lines) {
+    const t = d.trigger;
+    const senderBatchId = `FG-${d.id.toUpperCase().slice(0, 18)}-${t.id}-${tag}`;
+    const batch = {
+      senderBatchId,
+      amountCents: sumCents(lines.map((l) => l.cents)),
+      createState: 'REQUESTED', payoutBatchId: null, batchStatus: null, simulated: t.simulated,
+      items: lines.map(({ r, cents, part }, i) => ({
+        senderItemId: `${senderBatchId}-${i + 1}`,
+        receiver: r.email,
+        partnerName: r.id,
+        registrantId: r.id,
+        part,
+        amountCents: cents,
+        note: `Floodgate direct aid for ${d.shortName}, payment ${part} of 2 (${r.id}).`,
+        payoutItemId: null, status: 'NOT_SUBMITTED', errors: null, updatedAt: nowIso(),
+      })),
+      error: null, createdAt: nowIso(), updatedAt: nowIso(),
+    };
+    t.payouts.push(batch);
+    return batch;
+  }
+
+  // ---------------- Live events (GDACS) ----------------
+  // Earthquakes, wildfires and cyclones that GDACS rates Orange or Red open a campaign automatically.
+  function upsertLiveEvents(events) {
+    let added = 0;
+    for (const e of events) {
+      const id = `live-${e.type.toLowerCase()}-${e.eventId}`;
+      if (state.districts.has(id)) continue;
+      const at = nowIso();
+      const hazard = { EQ: 'earthquake', WF: 'wildfire', TC: 'cyclone' }[e.type] || 'disaster';
+      state.districts.set(id, {
+        id, kind: 'live', hazard, name: e.name, shortName: e.shortName, area: 'Live events', region: e.region || '',
+        country: e.country, countryCode: e.iso2 || null, river: null, basin: null, lat: e.lat, lon: e.lon,
+        language: e.language, threshold: null, referenceBaselineM3s: null,
+        partner: { name: '—', email: '' }, households: [],
+        radiusKm: e.radiusKm, payoutsSupported: PAYOUT_COUNTRIES.has(e.country),
+        status: 'TRIGGERED', watchEndsAt: null, scenario: null, release: null, registrants: [],
+        event: { source: 'GDACS', type: e.type, eventId: e.eventId, alertLevel: e.alertLevel, severity: e.severity, startedAt: e.fromDate, url: e.url },
+        lastEvaluation: null,
+        trigger: {
+          id: `TRG-${shortId()}`, at, simulated: false, live: true,
+          evaluation: { valid: true, trigger: true, alertLevel: e.alertLevel, severity: e.severity },
+          heldAtTriggerCents: 0, assessment: null, allocations: [], payouts: [], rounds: [], captureFailures: 0,
+          settlement: 'AWAITING_FUNDS', capturedCents: 0,
+          registrationClosesAt: new Date(Date.now() + AID_RULES.registrationHours * 3600_000).toISOString(),
+        },
+      });
+      added += 1;
+      const d = state.districts.get(id);
+      if (ai.assessEvent) {
+        ai.assessEvent({ district: d, event: d.event }).then((a) => { d.trigger.assessment = a; }).catch(() => {});
+      }
+    }
+    return added;
+  }
 
   // ---------------- PayPal webhooks ----------------
   // Called only after the route has verified the signature with PayPal. Payout state from a
@@ -520,7 +701,10 @@ export function createEngine({ providerFactory, forecast, ai, config, log = cons
     const pl = pledgesFor(d.id);
     const t = d.trigger;
     return {
-      id: d.id, name: d.name, shortName: d.shortName, area: d.area, region: d.region, country: d.country,
+      id: d.id, kind: d.kind, hazard: d.hazard, event: d.event ?? null, radiusKm: d.radiusKm, payoutsSupported: d.payoutsSupported,
+      registration: registrationState(d), aid: aidSummary(d),
+      registrants: d.registrants.map(publicRegistrant),
+      name: d.name, shortName: d.shortName, area: d.area, region: d.region, country: d.country,
       river: d.river, basin: d.basin, lat: d.lat, lon: d.lon, language: d.language,
       threshold: d.threshold, referenceBaselineM3s: d.referenceBaselineM3s,
       partner: { name: d.partner.name, email: config.payoutRecipientOverride || d.partner.email, sample: true },
@@ -542,10 +726,28 @@ export function createEngine({ providerFactory, forecast, ai, config, log = cons
         id: t.id, at: t.at, simulated: t.simulated, evaluation: t.evaluation, series: t.series,
         assessment: t.assessment, allocations: t.allocations, allocationTotalCents: t.allocationTotalCents,
         capturedCents: t.capturedCents, heldAtTriggerCents: t.heldAtTriggerCents,
-        payouts: t.payouts, settlement: t.settlement,
+        payouts: t.payouts.map(publicBatch), settlement: t.settlement, rounds: t.rounds, live: Boolean(t.live),
+        registrationClosesAt: t.registrationClosesAt,
       } : null,
       sample: true,
     };
+  }
+
+  // Public views never expose recipient emails, PayPal subjects or exact coordinates.
+  function publicRegistrant(r) {
+    return {
+      id: r.id, householdSize: r.householdSize, distanceKm: r.distanceKm, locationSource: r.locationSource, flags: r.flags,
+      status: r.status, registeredAt: r.registeredAt, entitlementCents: r.entitlementCents, part1Cents: r.part1Cents,
+      part2Cents: r.part2Cents, part2DueAt: r.part2DueAt, part2Paid: r.part2Paid, round: r.round,
+    };
+  }
+  function publicBatch(b) {
+    return { ...b, items: b.items.map(({ receiver, ...rest }) => ({ ...rest, receiver: maskEmail(receiver) })) };
+  }
+  function maskEmail(e) {
+    if (!e || !e.includes('@')) return '';
+    const [u, dom] = e.split('@');
+    return `${u.slice(0, 2)}•••@${dom}`;
   }
 
   function pledgeView(p) {
@@ -572,13 +774,13 @@ export function createEngine({ providerFactory, forecast, ai, config, log = cons
       }
       if (t) {
         const sc = t.simulated ? 'SCENARIO' : 'LIVE';
-        rows.push({ id: t.id, time: t.at, type: 'Trigger', district: d.shortName, party: 'Floodgate trigger engine', amount: (t.capturedCents ?? 0) / 100, currency: 'USD', status: 'TRIGGERED', reference: t.id, scenario: sc, provider: providerLabel(), zone: '', note: `ratio ${t.evaluation.ratio.toFixed(2)} >= ${d.threshold}` });
+        rows.push({ id: t.id, time: t.at, type: 'Trigger', district: d.shortName, party: t.live ? `GDACS ${d.event?.alertLevel} alert` : 'Floodgate trigger engine', amount: capturedCentsFor(d) / 100, currency: 'USD', status: 'TRIGGERED', reference: t.id, scenario: sc, provider: providerLabel(), zone: '', note: t.live ? `${d.event?.type} ${d.event?.eventId}: ${d.event?.severity}` : `ratio ${t.evaluation.ratio.toFixed(2)} >= ${d.threshold}` });
         for (const b of t.payouts) {
-          rows.push({ id: b.senderBatchId, time: b.createdAt, type: 'Payout batch', district: d.shortName, party: d.partner.name, amount: b.amountCents / 100, currency: 'USD', status: b.createState === 'REQUEST_FAILED' ? 'REQUEST_FAILED' : b.batchStatus || b.createState, reference: b.payoutBatchId || b.senderBatchId, scenario: sc, provider: providerLabel(), zone: '', note: b.error || b.pollError || `sender_batch_id ${b.senderBatchId}` });
-          for (const i of b.items) rows.push({ id: i.senderItemId, time: b.createdAt, type: 'Payout item', district: d.shortName, party: `${i.partnerName} <${i.receiver}>`, amount: i.amountCents / 100, currency: 'USD', status: i.status, reference: i.payoutItemId || '—', scenario: sc, provider: providerLabel(), zone: '', note: i.errors || '' });
+          rows.push({ id: b.senderBatchId, time: b.createdAt, type: 'Payout batch', district: d.shortName, party: `${b.items.length} household(s)`, amount: b.amountCents / 100, currency: 'USD', status: b.createState === 'REQUEST_FAILED' ? 'REQUEST_FAILED' : b.batchStatus || b.createState, reference: b.payoutBatchId || b.senderBatchId, scenario: sc, provider: providerLabel(), zone: '', note: b.error || b.pollError || `sender_batch_id ${b.senderBatchId}` });
+          for (const i of b.items) rows.push({ id: i.senderItemId, time: b.createdAt, type: 'Payout item', district: d.shortName, party: `${i.registrantId || i.partnerName} <${maskEmail(i.receiver)}>`, amount: i.amountCents / 100, currency: 'USD', status: i.status, reference: i.payoutItemId || '—', scenario: sc, provider: providerLabel(), zone: '', note: i.errors || (i.part ? `payment ${i.part} of 2` : '') });
         }
-        for (const a of t.allocations) rows.push({ id: `${t.id}-${a.householdId}`, time: t.at, type: 'Household allocation', district: d.shortName, party: `${a.label} (${a.members} members)`, amount: a.amountCents / 100, currency: 'USD', status: 'ALLOCATED', reference: a.householdId, scenario: sc, provider: 'LEDGER ONLY', zone: a.zone, note: 'Distributed by relief partner' });
       }
+      for (const r of d.registrants) rows.push({ id: `${d.id}-${r.id}`, time: r.registeredAt, type: 'Registration', district: d.shortName, party: `${r.id} (household of ${r.householdSize})`, amount: r.entitlementCents ? r.entitlementCents / 100 : null, currency: r.entitlementCents ? 'USD' : '', status: r.status, reference: r.id, scenario: '—', provider: 'PAYPAL IDENTITY', zone: '', note: [`${r.distanceKm} km`, ...r.flags].join(' · ') });
       if (d.release) rows.push({ id: `${d.id}-release`, time: d.release.at, type: 'Release', district: d.shortName, party: 'Watch window closed', amount: d.release.voidedCents / 100, currency: 'USD', status: d.release.voidFailures ? 'RELEASED_WITH_FAILURES' : 'RELEASED', reference: '—', scenario: '—', provider: providerLabel(), zone: '', note: d.release.reason });
     }
     for (const e of state.webhookEvents) {
@@ -612,6 +814,11 @@ export function createEngine({ providerFactory, forecast, ai, config, log = cons
     evaluate,
     release,
     refreshPayouts,
+    registerRecipient,
+    disburseRound,
+    releaseSecondParts,
+    upsertLiveEvents,
+    aidSummary: (id) => aidSummary(getDistrict(id)),
     applyWebhookEvent,
     setWebhookStatus,
     get webhookStatus() { return webhookStatus; },

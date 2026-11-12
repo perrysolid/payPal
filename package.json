@@ -23,6 +23,9 @@
   "homepage": "https://github.com/perrysolid/payPal#readme",
   "dependencies": {
     "@anthropic-ai/sdk": "^1.8.0",
+    "@bryntum/scheduler-enterprise": "^8.0.1",
+    "@bryntum/scheduler-react-enterprise": "^8.0.1",
+    "@channel3/sdk": "^4.9.0",
     "@paypal/paypal-server-sdk": "^2.5.0",
     "ag-grid-community": "^36.3.0",
     "ag-grid-react": "^36.3.0",
