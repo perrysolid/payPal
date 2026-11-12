@@ -31,6 +31,23 @@ function makeEngine(opts = {}) {
   return createEngine({ providerFactory, forecast: opts.forecast ?? fakeForecast(), ai, config: { payoutRecipientOverride: null }, log: { warn() {} } });
 }
 
+let regSeq = 0;
+async function register(engine, districtId, n = 1, opts = {}) {
+  const d = engine.districtSummary(districtId);
+  const out = [];
+  for (let i = 0; i < n; i += 1) {
+    regSeq += 1;
+    const off = opts.cluster ? 0 : regSeq * 0.002;
+    out.push(await engine.registerRecipient({
+      districtId,
+      identity: { subject: `sub-${regSeq}`, email: `r${regSeq}@example.test`, verified: opts.verified ?? true, country: d.countryCode ?? null, sandbox: true },
+      location: { lat: d.lat + off, lon: d.lon, source: 'device' },
+      householdSize: 4,
+    }));
+  }
+  return out;
+}
+
 async function pledge(engine, districtId, amount) {
   const p = await engine.createPledge({ districtId, amount });
   await engine.authorizePledge(p.orderId);
@@ -105,25 +122,43 @@ describe('financial invariants', () => {
     expect(engine.districtSummary('sylhet').totals.heldCents).toBe(1000);
   });
 
-  it('triggers once, captures once, payout never exceeds captured, allocations reconcile', async () => {
-    await pledge(engine, 'sylhet', '10.00');
-    await pledge(engine, 'sylhet', '15.55');
-    await pledge(engine, 'kurigram', '7.00');
-    engine.setScenario('sylhet', true);
-    const results = await Promise.all([engine.evaluate('sylhet'), engine.evaluate('sylhet'), engine.evaluate('sylhet')]);
+  it('triggers once, captures once; aid rounds split the pool equally and never exceed it', async () => {
+    await pledge(engine, 'tuguegarao', '10.00');
+    await pledge(engine, 'tuguegarao', '15.55');
+    await pledge(engine, 'garissa', '7.00');
+    engine.setScenario('tuguegarao', true);
+    const results = await Promise.all([engine.evaluate('tuguegarao'), engine.evaluate('tuguegarao'), engine.evaluate('tuguegarao')]);
     expect(results.filter((r) => r.outcome === 'TRIGGERED')).toHaveLength(1);
-    const d = engine.districtSummary('sylhet');
-    expect(d.trigger.simulated).toBe(true);
+    let d = engine.districtSummary('tuguegarao');
     expect(d.totals.capturedCents).toBe(2555);
+    expect(d.trigger.payouts).toHaveLength(0); // no intermediary payout: money waits for verified households
+    expect(engine.districtSummary('garissa').totals.heldCents).toBe(700);
+    await register(engine, 'tuguegarao', 3);
+    const r = await engine.disburseRound('tuguegarao');
+    expect(r.round.perHouseholdCents).toBe(851);
+    d = engine.districtSummary('tuguegarao');
     expect(d.trigger.payouts).toHaveLength(1);
-    expect(d.trigger.payouts[0].amountCents).toBe(2555);
-    expect(d.trigger.allocationTotalCents).toBe(2555);
-    // Other district untouched
-    expect(engine.districtSummary('kurigram').totals.heldCents).toBe(700);
-    expect(engine.districtSummary('kurigram').status).toBe('WATCHING');
-    // Re-evaluate: no new payout
-    await engine.evaluate('sylhet');
-    expect(engine.districtSummary('sylhet').trigger.payouts).toHaveLength(1);
+    expect(d.trigger.payouts[0].items).toHaveLength(3);
+    expect(d.trigger.payouts[0].amountCents).toBe(3 * 425);
+    expect(d.aid.committedCents).toBeLessThanOrEqual(d.aid.capturedCents);
+    expect(d.registrants.every((x) => !('email' in x))).toBe(true);
+    await expect(engine.disburseRound('tuguegarao')).rejects.toThrow(/No newly verified/);
+    await register(engine, 'tuguegarao', 1);
+    await expect(engine.disburseRound('tuguegarao')).rejects.toThrow(/Not enough/);
+    await expect(engine.releaseSecondParts('tuguegarao')).rejects.toThrow(/due yet/);
+  });
+
+  it('registration rules: verified account, one per account, inside radius, payout country, clusters held', async () => {
+    await expect(register(engine, 'sylhet', 1)).rejects.toThrow(/cannot pay recipients in Bangladesh/);
+    await expect(register(engine, 'garissa', 1, { verified: false })).rejects.toThrow(/verified PayPal/);
+    const d = engine.districtSummary('garissa');
+    const id = { subject: 'dup', email: 'dup@example.test', verified: true, country: 'KE', sandbox: true };
+    await engine.registerRecipient({ districtId: 'garissa', identity: id, location: { lat: d.lat, lon: d.lon }, householdSize: 2 });
+    await expect(engine.registerRecipient({ districtId: 'garissa', identity: id, location: { lat: d.lat, lon: d.lon }, householdSize: 2 })).rejects.toThrow(/already registered/);
+    await expect(engine.registerRecipient({ districtId: 'garissa', identity: { ...id, subject: 'far' }, location: { lat: d.lat + 3, lon: d.lon }, householdSize: 2 })).rejects.toThrow(/km from/);
+    const c = await register(engine, 'garissa', 4, { cluster: true });
+    expect(c.at(-1).status).toBe('REVIEW');
+    expect(c.at(-1).flags).toContain('LOCATION_CLUSTER');
   });
 
   it('release voids only that district and cannot follow a trigger', async () => {
@@ -160,29 +195,25 @@ describe('financial invariants', () => {
         };
       },
     });
-    await pledge(eng, 'sylhet', '12.34');
-    eng.setScenario('sylhet', true);
-    await eng.evaluate('sylhet');
-    let d = eng.districtSummary('sylhet');
-    expect(d.status).toBe('TRIGGERED');
+    await pledge(eng, 'garissa', '12.34');
+    eng.setScenario('garissa', true);
+    await eng.evaluate('garissa');
+    let d = eng.districtSummary('garissa');
     expect(d.totals.capturedCents).toBe(0);
-    expect(d.trigger.payouts).toHaveLength(0);
     expect(d.trigger.settlement).toBe('NEEDS_RETRY');
-
     failCapture = false;
-    await eng.evaluate('sylhet');
-    d = eng.districtSummary('sylhet');
+    await eng.evaluate('garissa');
+    await register(eng, 'garissa', 2);
+    await eng.disburseRound('garissa');
+    d = eng.districtSummary('garissa');
     expect(d.totals.capturedCents).toBe(1234);
     expect(d.trigger.payouts[0].createState).toBe('REQUEST_FAILED');
-    expect(d.totals.payoutInitiatedCents).toBe(0);
     expect(d.totals.payoutCompletedCents).toBe(0);
-
     failPayout = false;
-    await eng.evaluate('sylhet');
-    d = eng.districtSummary('sylhet');
+    await eng.evaluate('garissa');
+    d = eng.districtSummary('garissa');
     expect(d.trigger.payouts).toHaveLength(1);
     expect(d.trigger.payouts[0].createState).toBe('CREATED');
-    expect(d.trigger.payouts[0].amountCents).toBe(1234);
   });
 
   it('forecast failure never triggers or moves money', async () => {
@@ -241,21 +272,23 @@ describe('allocations and AI guards', () => {
 describe('PayPal webhooks', () => {
   it('applies a verified payout-item event once and ignores redelivery', async () => {
     const engine = makeEngine();
-    await pledge(engine, 'lokoja', '20.00');
-    engine.setScenario('lokoja', true);
-    await engine.evaluate('lokoja');
-    const b = engine.districtSummary('lokoja').trigger.payouts[0];
+    await pledge(engine, 'garissa', '20.00');
+    engine.setScenario('garissa', true);
+    await engine.evaluate('garissa');
+    await register(engine, 'garissa', 1);
+    await engine.disburseRound('garissa');
+    const b = engine.districtSummary('garissa').trigger.payouts[0];
     const evt = {
       id: 'WH-TEST-1',
       event_type: 'PAYMENT.PAYOUTS-ITEM.SUCCEEDED',
       resource: { payout_batch_id: b.payoutBatchId, payout_item_id: 'ITEM-XYZ', transaction_status: 'SUCCESS', payout_item: { sender_item_id: b.items[0].senderItemId } },
     };
     const first = engine.applyWebhookEvent(evt);
-    expect(first.districtId).toBe('lokoja');
-    const after = engine.districtSummary('lokoja');
+    expect(first.districtId).toBe('garissa');
+    const after = engine.districtSummary('garissa');
     expect(after.trigger.payouts[0].items[0].status).toBe('SUCCESS');
     expect(after.trigger.payouts[0].items[0].payoutItemId).toBe('ITEM-XYZ');
-    expect(after.totals.payoutCompletedCents).toBe(2000);
+    expect(after.totals.payoutCompletedCents).toBe(1000);
     expect(engine.applyWebhookEvent(evt).duplicate).toBe(true);
     expect(engine.snapshot().ledger.filter((r) => r.type === 'PayPal webhook')).toHaveLength(1);
   });

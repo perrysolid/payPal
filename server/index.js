@@ -9,6 +9,10 @@ import { createEngine, HttpError } from './engine.js';
 import { createMockProvider } from './payments/mock.js';
 import { createPayPalProvider } from './payments/paypal.js';
 import { DISTRICT_IDS } from './data/districts.js';
+import { createEventService } from './events.js';
+import { createIdentityService } from './identity.js';
+import { createSupplyService } from './supplies.js';
+import { AID_RULES } from './engine.js';
 
 export const WEBHOOK_PATH = '/api/webhooks/paypal';
 export const WEBHOOK_EVENTS = [
@@ -24,11 +28,12 @@ loadEnvFile();
 const config = loadConfig();
 config.warnings.forEach((w) => console.warn(`[floodgate] ${w}`));
 
-export function createApp({ cfg = config, forecast = createForecastService(), ai = createAiService(cfg.ai), providerFactory } = {}) {
+export function createApp({ cfg = config, forecast = createForecastService(), ai = createAiService(cfg.ai), providerFactory, events = createEventService(), supplies = createSupplyService({ apiKey: process.env.CHANNEL3_API_KEY }) } = {}) {
   const factory = providerFactory ?? (() => (cfg.paymentMode === 'paypal' ? createPayPalProvider(cfg.paypal) : createMockProvider()));
   const engine = createEngine({ providerFactory: factory, forecast, ai, config: cfg });
   const app = express();
   app.disable('x-powered-by');
+  app.set('trust proxy', 1);
   app.use(express.json({
     limit: '64kb',
     // Keep the exact bytes of webhook deliveries for signature verification.
@@ -43,9 +48,18 @@ export function createApp({ cfg = config, forecast = createForecastService(), ai
   const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res)).catch(next);
   const districtParam = (req) => {
     const id = String(req.params.id || '');
-    if (!DISTRICT_IDS.includes(id)) throw new HttpError(404, `Unknown district "${id}"`);
+    if (!/^[a-z0-9-]{3,60}$/.test(id)) throw new HttpError(404, `Unknown campaign "${id}"`);
+    engine.getDistrict(id); // 404 if unknown
     return id;
   };
+  const identity = createIdentityService({ cfg });
+  const publicBase = (req) => (process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
+  const callbackUrl = (req) => `${publicBase(req)}/api/auth/paypal/callback`;
+
+  async function loadLiveEvents() {
+    try { engine.upsertLiveEvents(await events.list()); } catch (e) { console.warn(`[floodgate] GDACS: ${e.message}`); }
+  }
+  app.locals.loadLiveEvents = loadLiveEvents;
 
   app.get('/api/health', (req, res) => res.json({ ok: true }));
 
@@ -57,6 +71,9 @@ export function createApp({ cfg = config, forecast = createForecastService(), ai
       ai: { enabled: ai.enabled, model: ai.enabled ? ai.model : null },
       payoutRecipientOverride: Boolean(cfg.payoutRecipientOverride),
       webhooks: { enabled: engine.webhookStatus.enabled },
+      aidRules: AID_RULES,
+      bryntumLicenseKey: process.env.BRYNTUM_LICENSE_KEY || null, // client-side license key by design
+      suppliesEnabled: supplies.enabled,
       limits: { minPledge: '1.00', maxPledge: '1000.00', currency: 'USD' },
       disclaimers: [
         'Payments are processed in the PayPal Sandbox environment.',
@@ -74,6 +91,7 @@ export function createApp({ cfg = config, forecast = createForecastService(), ai
 
   app.get('/api/districts/:id/forecast', wrap(async (req, res) => {
     const d = engine.getDistrict(districtParam(req));
+    if (d.kind === 'live') return res.json({ live: null, simulated: null, event: d.event });
     const view = await engine.forecastView(d, { force: req.query.refresh === '1' });
     res.json(view);
   }));
@@ -88,7 +106,8 @@ export function createApp({ cfg = config, forecast = createForecastService(), ai
 
   app.post('/api/pledges', wrap(async (req, res) => {
     const { districtId, amount, donorName } = req.body || {};
-    if (typeof districtId !== 'string' || !DISTRICT_IDS.includes(districtId)) throw new HttpError(400, 'districtId is invalid');
+    if (typeof districtId !== 'string' || !/^[a-z0-9-]{3,60}$/.test(districtId)) throw new HttpError(400, 'districtId is invalid');
+    engine.getDistrict(districtId);
     if (typeof amount !== 'string' && typeof amount !== 'number') throw new HttpError(400, 'amount is required');
     const p = await engine.createPledge({ districtId, amount, donorName });
     res.status(201).json({ orderId: p.orderId, pledgeId: p.id, amount: (p.amountCents / 100).toFixed(2), currency: 'USD' });
@@ -144,6 +163,69 @@ export function createApp({ cfg = config, forecast = createForecastService(), ai
     res.json({ received: true });
   }));
 
+  // ---- Direct aid: Log in with PayPal, registration, payment rounds ----
+  app.get('/api/auth/paypal/start', (req, res, next) => {
+    try {
+      const districtId = String(req.query.district || '');
+      engine.getDistrict(districtId);
+      const { url } = identity.startUrl({ districtId, redirectUri: callbackUrl(req) });
+      res.redirect(302, url);
+    } catch (e) { next(e); }
+  });
+
+  app.get('/api/auth/paypal/callback', wrap(async (req, res) => {
+    if (req.query.error) return res.redirect(302, `/?register_error=${encodeURIComponent(String(req.query.error_description || req.query.error))}`);
+    try {
+      const { token, districtId } = await identity.complete({ code: String(req.query.code || ''), state: String(req.query.state || ''), redirectUri: callbackUrl(req) });
+      res.redirect(302, `/?register=${token}&district=${encodeURIComponent(districtId)}`);
+    } catch (e) {
+      res.redirect(302, `/?register_error=${encodeURIComponent(e.message)}`);
+    }
+  }));
+
+  app.get('/api/auth/session/:token', (req, res) => {
+    const s = identity.session(req.params.token);
+    if (!s) return res.status(404).json({ error: 'Sign-in session expired. Sign in with PayPal again.' });
+    const { identity: id } = s;
+    res.json({ districtId: s.districtId, verified: id.verified, country: id.country, name: id.name, email: id.email.replace(/^(.{2}).*@/, '$1•••@') });
+  });
+
+  app.post('/api/districts/:id/registrations', wrap(async (req, res) => {
+    const id = districtParam(req);
+    const s = identity.session(req.body?.token);
+    if (!s || s.districtId !== id) throw new HttpError(401, 'Sign in with PayPal for this campaign first.');
+    const loc = req.body?.location || {};
+    const r = await engine.registerRecipient({
+      districtId: id, identity: s.identity, householdSize: req.body?.householdSize,
+      location: { lat: loc.lat, lon: loc.lon, source: loc.source === 'manual' ? 'manual' : 'device' },
+    });
+    identity.consume(req.body.token);
+    res.status(201).json({ id: r.id, status: r.status, flags: r.flags, distanceKm: r.distanceKm, district: engine.districtSummary(id) });
+  }));
+
+  app.post('/api/districts/:id/disburse', wrap(async (req, res) => {
+    const id = districtParam(req);
+    const r = await engine.disburseRound(id);
+    res.json({ ...r, district: engine.districtSummary(id) });
+  }));
+
+  app.post('/api/districts/:id/release-second', wrap(async (req, res) => {
+    const id = districtParam(req);
+    const r = await engine.releaseSecondParts(id);
+    res.json({ ...r, district: engine.districtSummary(id) });
+  }));
+
+  app.get('/api/districts/:id/essentials', wrap(async (req, res) => {
+    const d = engine.getDistrict(districtParam(req));
+    res.json(await supplies.essentials(d.hazard));
+  }));
+
+  app.post('/api/live-events/refresh', wrap(async (req, res) => {
+    events.clear?.();
+    await loadLiveEvents();
+    res.json({ ok: true });
+  }));
+
   app.post('/api/ask', wrap(async (req, res) => {
     const q = req.body?.question;
     if (typeof q !== 'string' || !q.trim() || q.length > 300) throw new HttpError(400, 'question must be 1-300 characters');
@@ -153,6 +235,7 @@ export function createApp({ cfg = config, forecast = createForecastService(), ai
   app.post('/api/reset', (req, res) => {
     engine.reset();
     forecast.clear?.();
+    loadLiveEvents();
     res.json({
       ok: true,
       note: 'Records cleared and district data restored. Completed PayPal transactions are not reversed.',
@@ -208,6 +291,8 @@ function loadEnvFile() {
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
   const { app, engine } = createApp();
+  app.locals.loadLiveEvents();
+  setInterval(() => { app.locals.loadLiveEvents(); }, 15 * 60_000).unref();
   setupWebhooks(engine).catch((e) => {
     engine.setWebhookStatus({ enabled: false, error: e.message });
     console.warn(`[floodgate] webhooks disabled: ${e.message}`);

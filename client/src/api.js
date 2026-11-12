@@ -38,4 +38,9 @@ export const api = {
   refreshPayouts: (id) => request('POST', `/api/districts/${id}/payouts/refresh`),
   ask: (question) => request('POST', '/api/ask', { question }),
   reset: () => request('POST', '/api/reset'),
+  session: (token) => request('GET', `/api/auth/session/${encodeURIComponent(token)}`),
+  register: (id, body) => request('POST', `/api/districts/${id}/registrations`, body),
+  disburse: (id) => request('POST', `/api/districts/${id}/disburse`),
+  releaseSecond: (id) => request('POST', `/api/districts/${id}/release-second`),
+  essentials: (id) => request('GET', `/api/districts/${id}/essentials`),
 };
