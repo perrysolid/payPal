@@ -93,9 +93,9 @@ export default function Settlement({ district: d, pledges, onRefresh, busy }) {
           <div className="panel-pad" style={{ borderTop: '1px solid var(--line-2)', fontSize: 12.5, color: 'var(--ink-2)' }}>
             <div className="eyebrow" style={{ marginBottom: 6 }}>Payment states</div>
             <p style={{ margin: '0 0 6px' }}><b>Authorization</b>: a hold on the donor’s PayPal funds. Nothing is charged.</p>
-            <p style={{ margin: '0 0 6px' }}><b>Capture</b>: the held amount is charged after the deterministic trigger.</p>
+            <p style={{ margin: '0 0 6px' }}><b>Capture</b>: the held amount is charged once the district crosses its threshold.</p>
             <p style={{ margin: '0 0 6px' }}><b>Payout initiated</b>: PayPal accepted the batch. <b>Completed</b> is shown only once PayPal reports the item as SUCCESS.</p>
-            <p style={{ margin: 0 }}><b>Allocation</b>: a ledger instruction to the relief partner, not a PayPal transfer.</p>
+            <p style={{ margin: 0 }}><b>Allocation</b>: the share of the payout the relief partner distributes to each household.</p>
           </div>
         </div>
         <div>
