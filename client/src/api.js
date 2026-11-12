@@ -28,6 +28,7 @@ async function request(method, url, body) {
 
 export const api = {
   config: () => request('GET', '/api/config'),
+  floods: () => request('GET', '/api/floods'),
   state: () => request('GET', '/api/state'),
   forecast: (id, refresh) => request('GET', `/api/districts/${id}/forecast${refresh ? '?refresh=1' : ''}`),
   scenario: (id, active) => request('POST', `/api/districts/${id}/scenario`, { active }),

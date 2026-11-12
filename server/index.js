@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig } from './config.js';
 import { createForecastService } from './forecast.js';
 import { createAiService } from './ai.js';
+import { createFloodService } from './floods.js';
 import { createEngine, HttpError } from './engine.js';
 import { createMockProvider } from './payments/mock.js';
 import { createPayPalProvider } from './payments/paypal.js';
@@ -28,7 +29,7 @@ loadEnvFile();
 const config = loadConfig();
 config.warnings.forEach((w) => console.warn(`[floodgate] ${w}`));
 
-export function createApp({ cfg = config, forecast = createForecastService(), ai = createAiService(cfg.ai), providerFactory, events = createEventService(), supplies = createSupplyService({ apiKey: process.env.CHANNEL3_API_KEY }) } = {}) {
+export function createApp({ cfg = config, forecast = createForecastService(), ai = createAiService(cfg.ai), floods = createFloodService(), providerFactory, events = createEventService(), supplies = createSupplyService({ apiKey: process.env.CHANNEL3_API_KEY }) } = {}) {
   const factory = providerFactory ?? (() => (cfg.paymentMode === 'paypal' ? createPayPalProvider(cfg.paypal) : createMockProvider()));
   const engine = createEngine({ providerFactory: factory, forecast, ai, config: cfg });
   const app = express();
@@ -86,6 +87,7 @@ export function createApp({ cfg = config, forecast = createForecastService(), ai
 
   const specPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../docs/openapi.yaml');
   app.get('/api/openapi.yaml', (req, res) => res.type('application/yaml').sendFile(specPath));
+  app.get('/api/floods', wrap(async (req, res) => res.json(await floods.get())));
 
   app.get('/api/state', (req, res) => res.json(engine.snapshot()));
 

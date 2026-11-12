@@ -1,10 +1,15 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from './api.js';
-import Board from './components/Board.jsx';
 import Detail from './components/Detail.jsx';
 import Assessment from './components/Assessment.jsx';
 import Aid from './components/Aid.jsx';
 import Ledger from './components/Ledger.jsx';
+import Globe from './components/Globe.jsx';
+import FloodMap from './components/FloodMap.jsx';
+import Hotspots from './components/Hotspots.jsx';
+import Water from './components/Water.jsx';
+import LiveFloods from './components/LiveFloods.jsx';
+import { nearestDistrict, day } from './geo.js';
 import { usd, ratio } from './format.js';
 
 function Mark() {
@@ -17,12 +22,38 @@ function Mark() {
   );
 }
 
+function CountUp({ value }) {
+  const [n, setN] = useState(0);
+  useEffect(() => {
+    let raf;
+    const t0 = performance.now();
+    const step = (t) => {
+      const k = Math.min(1, (t - t0) / 1800);
+      setN(Math.round(value * (1 - (1 - k) ** 3)));
+      if (k < 1) raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [value]);
+  return <>{n}</>;
+}
+
+function Counter({ value, label, sub, hot }) {
+  return (
+    <div className={`counter ${hot ? 'warn' : ''}`}>
+      <div className="counter-n">{value == null ? '–' : <CountUp value={value} />}</div>
+      <div className="counter-l">{label}</div>
+      <div className="counter-s">{sub}</div>
+    </div>
+  );
+}
+
 function Stepper({ d, pledgeCount }) {
   const steps = [
-    { k: 'PLEDGE', d: 'Donor authorizes a hold. Not charged.' },
-    { k: 'WATCH', d: 'River discharge vs 30-day median.' },
-    { k: 'TRIGGER', d: 'Threshold met: capture and pay out.', alert: true },
-    { k: 'RELEASE', d: 'No trigger: holds voided.' },
+    { k: 'PLEDGE' },
+    { k: 'WATCH' },
+    { k: 'TRIGGER', alert: true },
+    { k: 'RELEASE' },
   ];
   const state = (k) => {
     if (!d) return '';
@@ -38,11 +69,28 @@ function Stepper({ d, pledgeCount }) {
         <div key={s.k} className={`step ${state(s.k)} ${s.alert ? 'alert' : ''}`}>
           <div className="k">0{i + 1}</div>
           <div className="t">{s.k}</div>
-          <div className="d">{s.d}</div>
         </div>
       ))}
     </div>
   );
+}
+
+function parseHash() {
+  const h = window.location.hash.replace(/^#\/?/, '');
+  const [a, id] = h.split('/');
+  if (a === 'alerts') return id ? { page: 'area', id } : { page: 'alerts' };
+  if (a === 'district' && id) return { page: 'district', id };
+  if (a === 'ledger') return { page: 'ledger' };
+  return { page: 'home' };
+}
+function useRoute() {
+  const [r, setR] = useState(parseHash);
+  useEffect(() => {
+    const on = () => { const n = parseHash(); setR(n); if (n.page !== 'home') window.scrollTo(0, 0); };
+    window.addEventListener('hashchange', on);
+    return () => window.removeEventListener('hashchange', on);
+  }, []);
+  return r;
 }
 
 let toastSeq = 0;
@@ -58,6 +106,22 @@ export default function App() {
   const [toasts, setToasts] = useState([]);
   const [fatal, setFatal] = useState(null);
   const detailRef = useRef(null);
+  const [floods, setFloods] = useState(null);
+  const route = useRoute();
+  const nearestId = (() => {
+    if (route.page !== 'area' || !floods || !snap) return null;
+    const ev = floods.events.find((e) => String(e.id) === route.id);
+    return ev ? nearestDistrict(snap.districts, ev)?.district.id ?? null : null;
+  })();
+  useEffect(() => { if (nearestId) setSelected(nearestId); }, [nearestId, route.id]);
+  useEffect(() => { if (route.page === 'district') setSelected(route.id); }, [route.page, route.id]);
+  useEffect(() => {
+    let dead = false;
+    const load = () => api.floods().then((f) => { if (!dead) setFloods(f); }).catch((e) => { if (!dead) setFloods((x) => x ?? { events: [], error: e.message }); });
+    load();
+    const t = setInterval(load, 10 * 60 * 1000);
+    return () => { dead = true; clearInterval(t); };
+  }, []);
 
   const toast = useCallback((msg, kind = 'info', ms = 6500) => {
     const id = ++toastSeq;
@@ -89,7 +153,7 @@ export default function App() {
         setSnap(s);
         s.districts.forEach((d) => loadForecast(d.id));
         const q = new URLSearchParams(window.location.search);
-        if (q.get('register') && q.get('district')) { setSelected(q.get('district')); setRegisterToken(q.get('register')); }
+        if (q.get('register') && q.get('district')) { setSelected(q.get('district')); setRegisterToken(q.get('register')); window.location.hash = `#/district/${q.get('district')}`; }
         if (q.get('register_error')) setFatal(null), setTimeout(() => alertError(q.get('register_error')), 0);
         if (q.toString()) window.history.replaceState(null, '', '/');
       } catch (e) {
@@ -116,6 +180,15 @@ export default function App() {
   const isMock = config.paymentMode !== 'paypal';
   const pledgeCount = snap.pledges.filter((p) => p.districtId === selected && !['CREATED', 'CANCELLED', 'AUTH_FAILED'].includes(p.status)).length;
   const totals = snap.districts.reduce((a, x) => ({ held: a.held + x.totals.heldCents, cap: a.cap + x.totals.capturedCents }), { held: 0, cap: 0 });
+
+  const ev = floods?.events;
+  const floodStats = [
+    { value: ev ? ev.length : null, label: 'Active floods', sub: 'GDACS, live' },
+    { value: ev ? new Set(ev.map((e) => e.country)).size : null, label: 'Countries affected', sub: 'with a current flood' },
+    { value: ev ? ev.filter((e) => e.alert === 'Orange' || e.alert === 'Red').length : null, label: 'Flood warnings', sub: 'Orange and Red alerts', hot: true },
+    { value: ev ? ev.filter((e) => e.alert === 'Green').length : null, label: 'Watch level', sub: 'Green alerts' },
+    { value: snap.districts.filter((x) => x.status === 'WATCHING').length, label: 'Districts watched', sub: `of ${snap.districts.length} Floodgate districts` },
+  ];
 
   const actions = {
     mockPledge: (body) => run('pledge', async () => {
@@ -163,55 +236,108 @@ export default function App() {
     toast(r.note);
   });
 
+  const openEvent = (e) => { window.location.hash = `#/alerts/${e.id}`; };
+  const areaEvent = route.page === 'area' ? floods?.events?.find((e) => String(e.id) === route.id) : null;
+  const areaNear = areaEvent ? nearestDistrict(snap.districts, areaEvent) : null;
+
+  const detailView = (
+    <>
+      <div className="area-filter" role="group" aria-label="Pledge district">
+        {snap.districts.map((x) => (
+          <button type="button" key={x.id} className={selected === x.id ? 'on' : ''} aria-pressed={selected === x.id} onClick={() => setSelected(x.id)}>{x.shortName ?? x.name}</button>
+        ))}
+      </div>
+      <div className="section-head"><h2>{d.name}</h2><span className="sub">{d.kind === 'live' ? 'Live event · direct aid' : `${d.river} · direct aid to verified households`}</span></div>
+      <Detail district={d} forecast={fc} config={config} busy={busy} actions={actions} onRefreshForecast={() => loadForecast(selected, true)} />
+      <Assessment district={d} licenseKey={config.bryntumLicenseKey} />
+      <Aid district={d} config={config} api={api} busy={busy} run={run} toast={toast} webhooks={snap.webhooks} registerToken={registerToken && d.id === selected ? registerToken : null} clearRegister={() => setRegisterToken(null)} />
+    </>
+  );
+
   return (
     <>
-      <header className="topbar">
-        <div className="topbar-inner">
-          <div className="brand"><Mark /><span className="brand-name">Floodgate</span><span className="brand-tag">Relief that moves before the flood arrives</span></div>
-          <div className="top-spacer" />
-          <div className="chips">
-            <span className={`chip ${isMock ? 'warn' : ''}`}>{isMock ? 'Mock payments' : 'PayPal Sandbox'}</span>
+      {route.page === 'home' ? (
+        <section className="landing" id="top">
+          <header className="topline"><a className="bookman" href="#top">Floodgate</a></header>
+
+          <div className="hero-row">
+            <div className="landing-body">
+              <h1 className="land-title">Relief before<br />the flood.</h1>
+              <a className="cta-main" href="#/ledger">Ledger <span className="arrow">↗</span></a>
+            </div>
+            <div className="globe-wrap"><Globe events={floods?.events} /></div>
           </div>
-          <button type="button" className="btn-reset" onClick={reset} disabled={busy === 'reset'} title="Clears Floodgate records and restores the initial district data. PayPal transactions are not reversed.">Reset</button>
-        </div>
-      </header>
-      {isMock && <div className="mock-banner">Mock payment mode: no PayPal requests are made.</div>}
+
+          <div className="water-zone">
+            <Water />
+            <div className="counters">
+              {floodStats.map((x) => <Counter key={x.label} {...x} />)}
+            </div>
+          </div>
+        </section>
+      ) : (
+        <header className="subbar"><a className="bookman" href="#/">Floodgate</a></header>
+      )}
 
       <main>
-        <section className="hero">
-          <div>
-            <div className="eyebrow" style={{ marginBottom: 6 }}>Direct disaster aid · see exactly whom you helped</div>
-            <h1>Give before the disaster. See exactly whom you helped.</h1>
-            <p>Pledge to an at-risk area with a PayPal hold. When the river forecast crosses the danger line, or a GDACS alert confirms an earthquake, wildfire or cyclone, the money goes straight to verified households who sign in with PayPal: no intermediary, 0% fee, every payment on a public ledger. If nothing happens, your hold is released.</p>
-            <p className="muted mono" style={{ fontSize: 12, marginTop: 10 }}>Across all districts: {usd(totals.held)} held · {usd(totals.cap)} captured</p>
-          </div>
-          <Stepper d={d} pledgeCount={pledgeCount} />
-        </section>
+        {route.page === 'home' && (
+          <>
+            <div id="map" style={{ height: 40 }} />
+            <LiveFloods floods={floods} districts={snap.districts} forecasts={forecasts} />
 
-        <div className="section-head"><h2>District board</h2><span className="sub">{snap.districts.length} districts · {new Set(snap.districts.map((x) => x.country)).size} countries · select a district</span></div>
-        <div className="area-filter" role="group" aria-label="Filter by region">
-          {['All', ...new Set(snap.districts.map((x) => x.area))].map((a) => (
-            <button type="button" key={a} className={area === a ? 'on' : ''} aria-pressed={area === a} onClick={() => setArea(a)}>
-              {a}<span className="n">{a === 'All' ? snap.districts.length : snap.districts.filter((x) => x.area === a).length}</span>
-            </button>
-          ))}
-        </div>
-        <Board districts={area === 'All' ? snap.districts : snap.districts.filter((x) => x.area === area)} forecasts={forecasts} selected={selected} onSelect={(id) => { setSelected(id); detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} />
+            <div id="board" className="section-head center"><a className="alerts-link" href="#/alerts"><h2>Highest flood alerts worldwide <span>↗</span></h2></a></div>
+            <Hotspots events={floods?.events} error={floods?.error} limit={4} onOpen={openEvent} />
 
-        <div ref={detailRef} className="section-head" style={{ scrollMarginTop: 70 }}><h2>District detail</h2><span className="sub">{d.kind === 'live' ? 'Live event · direct aid' : `${d.river} · direct aid to verified households`}</span></div>
-        <Detail district={d} forecast={fc} config={config} busy={busy} actions={actions} onRefreshForecast={() => loadForecast(selected, true)} />
-        <Assessment district={d} licenseKey={config.bryntumLicenseKey} />
-        <Aid district={d} config={config} api={api} busy={busy} run={run} toast={toast} webhooks={snap.webhooks} registerToken={registerToken && d.id === selected ? registerToken : null} clearRegister={() => setRegisterToken(null)} />
+            <Aid compact district={d} config={config} api={api} busy={busy} run={run} toast={toast} webhooks={snap.webhooks} registerToken={null} clearRegister={() => {}} />
+          </>
+        )}
 
-        <div className="section-head"><h2>Financial ledger</h2><span className="sub">Every authorization, capture, void, payout and allocation</span></div>
-        <Ledger rows={snap.ledger} api={api} onError={toastError} />
+        {route.page === 'ledger' && (
+          <>
+            <a className="back" href="#/">← Back</a>
+            <div className="section-head center"><h2>Ledger</h2></div>
+            <Ledger rows={snap.ledger} api={api} onError={toastError} />
+          </>
+        )}
+
+        {route.page === 'alerts' && (
+          <>
+            <a className="back" href="#/">← Back</a>
+            <div className="section-head center"><h2>Flood alerts worldwide</h2></div>
+            <div className="panel map-wide"><FloodMap events={floods?.events} /></div>
+            <div style={{ height: 20 }} />
+            <Hotspots events={floods?.events} error={floods?.error} limit={999} onOpen={openEvent} />
+          </>
+        )}
+
+        {route.page === 'area' && (
+          <>
+            <a className="back" href="#/alerts">← All flood alerts</a>
+            {areaEvent ? (
+              <div className="area-head">
+                <h1>{areaEvent.name}</h1>
+                <div className="area-facts">
+                  <span className={`alert-pill ${areaEvent.alert.toLowerCase()}`}>{areaEvent.alert} alert</span>
+                  <span>{areaEvent.severityText || 'Severity not rated'}</span>
+                  <span>Since {day(areaEvent.from)}</span>
+                  <span className="mono">{areaEvent.lat.toFixed(2)}, {areaEvent.lng.toFixed(2)}</span>
+                  {areaNear && <span>Nearest district: {areaNear.district.name} · {Math.round(areaNear.km)} km</span>}
+                </div>
+              </div>
+            ) : <div className="empty">{floods ? 'This flood alert is no longer active.' : 'Loading…'}</div>}
+            {detailView}
+          </>
+        )}
+
+        {route.page === 'district' && (
+          <>
+            <a className="back" href="#/">← Back</a>
+            {detailView}
+          </>
+        )}
       </main>
 
-      <footer>
-        <div className="eyebrow">Notes</div>
-        <ul>{config.disclaimers.map((x) => <li key={x}>{x}</li>)}</ul>
-        <p>Forecast data: Open-Meteo Flood API (GloFAS v4).</p>
-      </footer>
+      <footer><p>Sandbox demo · sample data · no real money moves. Forecasts: Open-Meteo GloFAS. <button type="button" className="link-btn" onClick={reset} disabled={busy === 'reset'}>Reset demo</button></p></footer>
 
       <div className="toasts" aria-live="polite">
         {toasts.map((t) => (

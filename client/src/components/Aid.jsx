@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { usd, time } from '../format.js';
+import AidCarousel from './AidCarousel.jsx';
 
 const FLAG_LABEL = {
   LOCATION_CLUSTER: 'Many registrations at this spot: held for review',
@@ -7,7 +8,7 @@ const FLAG_LABEL = {
   COUNTRY_MISMATCH_SANDBOX: 'Sandbox: account country differs',
 };
 
-export default function Aid({ district: d, config, api, busy, run, toast, registerToken, clearRegister, webhooks }) {
+export default function Aid({ compact, district: d, config, api, busy, run, toast, registerToken, clearRegister, webhooks }) {
   const t = d.trigger;
   const rules = config.aidRules;
   const a = d.aid;
@@ -22,41 +23,68 @@ export default function Aid({ district: d, config, api, busy, run, toast, regist
 
   const items = t ? t.payouts.flatMap((b) => b.items.map((i) => ({ ...i, batchId: b.payoutBatchId, batchStatus: b.batchStatus }))) : [];
 
+  const cards = [
+    {
+      key: 'register',
+      node: (
+        <>
+          <div className="aid-card-t">Register with PayPal</div>
+          <p>{d.registration.open ? 'Verified residents sign in and receive an equal share.' : d.registration.reason}</p>
+          {d.registration.open && <a className="aid-btn" href={`/api/auth/paypal/start?district=${encodeURIComponent(d.id)}`}>Register</a>}
+        </>
+      ),
+    },
+    ...(t ? [
+      {
+        key: 'round',
+        node: (
+          <>
+            <div className="aid-card-t">Payment round</div>
+            <p>Split the pool equally among verified households.</p>
+            <button type="button" className="aid-btn" disabled={Boolean(busy) || !a.eligibleUnpaid} onClick={() => run('aid', async () => { const r = await api.disburse(d.id); toast(`Round ${r.round.no}: ${r.round.households} household(s), ${usd(r.round.perHouseholdCents)} each; ${usd(r.round.part1Cents)} paid now.`); })}>{busy === 'aid' ? 'Paying…' : 'Run round'}</button>
+          </>
+        ),
+      },
+      {
+        key: 'second',
+        node: (
+          <>
+            <div className="aid-card-t">Second payments</div>
+            <p>Release the reviewed second part of each payment.</p>
+            <button type="button" className="aid-btn" disabled={Boolean(busy)} onClick={() => run('aid2', async () => { await api.releaseSecond(d.id); toast('Second payments released.'); })}>Release</button>
+          </>
+        ),
+      },
+    ] : []),
+    ...((supplies?.items ?? []).map((x) => ({
+      key: `s-${x.need}`,
+      node: (
+        <a className="aid-supply" href={x.url} target="_blank" rel="noreferrer sponsored">
+          {x.image && <img src={x.image} alt="" loading="lazy" />}
+          <div className="aid-card-t">{x.need}</div>
+          <p>{x.title}</p>
+          <span className="mono">{usd(x.priceCents)}</span>
+        </a>
+      ),
+    }))),
+  ];
+
   return (
-    <div className="panel settle" style={{ marginTop: 16 }}>
-      <div className="panel-head">
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-          <span className="panel-title">Direct aid</span>
-          {t ? (t.simulated ? <span className="tag-sim">Scenario</span> : <span className="tag-live">{t.live ? 'Live event' : 'Live trigger'}</span>) : <span className="muted" style={{ fontSize: 12 }}>Pre-registration</span>}
-          <span className="muted" style={{ fontSize: 12 }}>No intermediary · Floodgate fee 0%</span>
-        </div>
-        {d.registration.open
-          ? <a className="btn" style={{ width: 'auto', padding: '6px 14px', fontSize: 13 }} href={`/api/auth/paypal/start?district=${encodeURIComponent(d.id)}`}>Register with PayPal</a>
-          : <span className="muted" style={{ fontSize: 12.5, maxWidth: 360 }}>{d.registration.reason}</span>}
+    <div className="aid">
+      <div className="aid-head">
+        <h2>Direct aid</h2>
+        <p>{t ? (t.simulated ? 'Scenario' : t.live ? 'Live event' : 'Live trigger') : 'Pre-registration'} · No intermediary · 0% fee</p>
       </div>
 
       {registerToken && <RegisterForm d={d} token={registerToken} api={api} run={run} toast={toast} onDone={clearRegister} />}
 
-      <div className="flow">
-        <div className="flow-step"><div className="l"><span>Pool (captured)</span></div><div className="v">{usd(a.capturedCents)}</div><div className="s">Held, not yet charged: {usd(d.totals.heldCents)}</div></div>
-        <div className="flow-step"><div className="l"><span>Committed to households</span></div><div className="v">{usd(a.committedCents)}</div><div className="s">{a.registrants} registered · {a.eligibleUnpaid} awaiting a round</div></div>
-        <div className="flow-step"><div className="l"><span>Paid via PayPal</span></div><div className="v">{usd(a.paidCents)}</div><div className="s">Completed: {usd(a.completedCents)}</div></div>
-        <div className="flow-step"><div className="l"><span>Held for review</span></div><div className="v">{usd(a.reservedForReviewCents)}</div><div className="s">Unallocated: {usd(a.availableCents)}</div></div>
-      </div>
+      <AidCarousel cards={cards} />
 
+      {!compact && (<>
       <div className="wh-line">
         <span className={`wh-dot ${webhooks?.enabled ? '' : 'off'}`} />
         <span><b>Rules (locked):</b> equal split per round, up to {usd(rules.capPerHouseholdCents)} per household · {Math.round(rules.firstPartShare * 100)}% now, the rest after a {rules.reviewHoldHours}-hour review · verified PayPal accounts only, one per account · within {d.radiusKm} km · registration {rules.registrationHours} h after trigger. {webhooks?.enabled ? 'Payout status from verified PayPal webhooks.' : 'Payout status polled from PayPal.'}</span>
       </div>
-
-      {t && (
-        <div style={{ display: 'flex', gap: 8, padding: '10px 18px', flexWrap: 'wrap', borderBottom: '1px solid var(--line-2)' }}>
-          <button type="button" className="btn" style={{ width: 'auto' }} disabled={Boolean(busy) || !a.eligibleUnpaid} onClick={() => run('aid', async () => { const r = await api.disburse(d.id); toast(`Round ${r.round.no}: ${r.round.households} household(s), ${usd(r.round.perHouseholdCents)} each; ${usd(r.round.part1Cents)} paid now.`); })}>
-            {busy === 'aid' ? <span className="spinner" /> : null}Run payment round
-          </button>
-          <button type="button" className="btn secondary" style={{ width: 'auto' }} disabled={Boolean(busy)} onClick={() => run('aid2', async () => { await api.releaseSecond(d.id); toast('Second payments released.'); })}>Release reviewed second payments</button>
-        </div>
-      )}
 
       <div className="settle-grid">
         <div>
@@ -93,24 +121,7 @@ export default function Aid({ district: d, config, api, busy, run, toast, regist
           ) : <p className="muted" style={{ padding: '0 18px 14px', fontSize: 13 }}>No payments yet.</p>}
         </div>
       </div>
-
-      {config.suppliesEnabled && (
-        <div style={{ borderTop: '1px solid var(--line-2)' }}>
-          <div className="eyebrow" style={{ padding: '12px 18px 6px' }}>What a household payment can cover · prices via Channel3</div>
-          <div className="supplies">
-            {!supplies ? <span className="muted" style={{ fontSize: 13 }}><span className="spinner" /> Loading prices…</span>
-              : supplies.items.map((s) => (
-                <a key={s.need} className="supply" href={s.url} target="_blank" rel="noreferrer sponsored">
-                  {s.image && <img src={s.image} alt="" loading="lazy" />}
-                  <div className="supply-need">{s.need}</div>
-                  <div className="supply-title">{s.title}</div>
-                  <div className="mono">{usd(s.priceCents)} <span className="muted">· {s.merchant}</span></div>
-                  {s.commissionRate ? <div className="muted" style={{ fontSize: 11 }}>Referral link: merchant may pay up to {(s.commissionRate * 100).toFixed(1)}% to Channel3</div> : null}
-                </a>
-              ))}
-          </div>
-        </div>
-      )}
+      </>)}
     </div>
   );
 }

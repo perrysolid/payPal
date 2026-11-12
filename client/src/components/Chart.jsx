@@ -85,51 +85,51 @@ export default function Chart({ live, simulated, showSim, baseline, threshold })
         onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
         <defs>
           <pattern id="simhatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-            <rect width="6" height="6" fill="#6a3fae" fillOpacity="0.06" />
-            <line x1="0" y1="0" x2="0" y2="6" stroke="#6a3fae" strokeOpacity="0.18" strokeWidth="2" />
+            <rect width="6" height="6" fill="var(--sim)" fillOpacity="0.06" />
+            <line x1="0" y1="0" x2="0" y2="6" stroke="var(--sim)" strokeOpacity="0.18" strokeWidth="2" />
           </pattern>
         </defs>
         {ticks.map((t) => (
           <g key={t}>
-            <line x1={PAD.l} x2={W - PAD.r} y1={y(t)} y2={y(t)} stroke="#ece9e0" />
-            <text x={PAD.l - 8} y={y(t) + 4} textAnchor="end" fontSize="10.5" fill="#667180" fontFamily="IBM Plex Mono">
+            <line x1={PAD.l} x2={W - PAD.r} y1={y(t)} y2={y(t)} stroke="var(--line-2)" />
+            <text x={PAD.l - 8} y={y(t) + 4} textAnchor="end" fontSize="10.5" fill="var(--muted)" fontFamily="IBM Plex Mono">
               {t >= 1000 ? `${(t / 1000).toLocaleString('en-US')}k` : t}
             </text>
           </g>
         ))}
-        <rect x={model.todayX} y={PAD.t} width={W - PAD.r - model.todayX} height={H - PAD.t - PAD.b} fill="#1e6a8d" fillOpacity="0.045" />
-        <line x1={model.todayX} x2={model.todayX} y1={PAD.t} y2={H - PAD.b} stroke="#33404f" strokeDasharray="2 3" />
-        <text x={model.todayX + 6} y={PAD.t + 10} fontSize="10.5" fill="#33404f" fontFamily="IBM Plex Mono">FORECAST</text>
-        <text x={model.todayX - 6} y={PAD.t + 10} fontSize="10.5" fill="#667180" textAnchor="end" fontFamily="IBM Plex Mono">OBSERVED</text>
+        <rect x={model.todayX} y={PAD.t} width={W - PAD.r - model.todayX} height={H - PAD.t - PAD.b} fill="var(--river)" fillOpacity="0.045" />
+        <line x1={model.todayX} x2={model.todayX} y1={PAD.t} y2={H - PAD.b} stroke="var(--ink-2)" strokeDasharray="2 3" />
+        <text x={model.todayX + 6} y={PAD.t + 10} fontSize="10.5" fill="var(--ink-2)" fontFamily="IBM Plex Mono">FORECAST</text>
+        <text x={model.todayX - 6} y={PAD.t + 10} fontSize="10.5" fill="var(--muted)" textAnchor="end" fontFamily="IBM Plex Mono">OBSERVED</text>
 
         {model.simArea && <path d={model.simArea} fill="url(#simhatch)" />}
-        {model.simArea && <text x={W - PAD.r - 6} y={H - PAD.b - 8} textAnchor="end" fontSize="11" fontWeight="600" fill="#6a3fae" fontFamily="IBM Plex Mono">SCENARIO</text>}
+        {model.simArea && <text x={W - PAD.r - 6} y={H - PAD.b - 8} textAnchor="end" fontSize="11" fontWeight="600" fill="var(--sim)" fontFamily="IBM Plex Mono">SCENARIO</text>}
 
-        <line x1={PAD.l} x2={W - PAD.r} y1={y(baseline)} y2={y(baseline)} stroke="#667180" strokeDasharray="6 4" strokeWidth="1.3" />
-        <text x={PAD.l + 6} y={y(baseline) - 5} fontSize="10.5" fill="#33404f" fontFamily="IBM Plex Mono">30-day median {m3s(baseline)}</text>
-        <line x1={PAD.l} x2={W - PAD.r} y1={y(model.danger)} y2={y(model.danger)} stroke="#b0411e" strokeWidth="1.5" />
-        <text x={PAD.l + 6} y={y(model.danger) - 5} fontSize="10.5" fill="#b0411e" fontFamily="IBM Plex Mono">Danger {threshold.toFixed(2)}× = {m3s(model.danger)}</text>
+        <line x1={PAD.l} x2={W - PAD.r} y1={y(baseline)} y2={y(baseline)} stroke="var(--muted)" strokeDasharray="6 4" strokeWidth="1.3" />
+        <text x={PAD.l + 6} y={y(baseline) - 5} fontSize="10.5" fill="var(--ink-2)" fontFamily="IBM Plex Mono">30-day median {m3s(baseline)}</text>
+        <line x1={PAD.l} x2={W - PAD.r} y1={y(model.danger)} y2={y(model.danger)} stroke="var(--danger)" strokeWidth="1.5" />
+        <text x={PAD.l + 6} y={y(model.danger) - 5} fontSize="10.5" fill="var(--danger)" fontFamily="IBM Plex Mono">Danger {threshold.toFixed(2)}× = {m3s(model.danger)}</text>
 
-        <path d={model.pastPath} fill="none" stroke="#0e1b2a" strokeWidth="2" strokeLinejoin="round" />
-        <path d={model.fcPath} fill="none" stroke="#1e6a8d" strokeWidth="2" strokeDasharray="5 4" strokeLinejoin="round" />
-        {model.simPath && <path d={model.simPath} fill="none" stroke="#6a3fae" strokeWidth="2.6" strokeLinejoin="round" />}
+        <path d={model.pastPath} fill="none" stroke="var(--ink)" strokeWidth="2" strokeLinejoin="round" />
+        <path d={model.fcPath} fill="none" stroke="var(--river)" strokeWidth="2" strokeDasharray="5 4" strokeLinejoin="round" />
+        {model.simPath && <path d={model.simPath} fill="none" stroke="var(--sim)" strokeWidth="2.6" strokeLinejoin="round" />}
 
         {all.map((p, i) => (i % labelEvery === 0 || (i === n - 1 && (n - 1) % labelEvery > 2)) && (
-          <text key={p.date} x={x(i)} y={H - 10} fontSize="10.5" fill="#667180" textAnchor="middle" fontFamily="IBM Plex Mono">{shortDate(p.date)}</text>
+          <text key={p.date} x={x(i)} y={H - 10} fontSize="10.5" fill="var(--muted)" textAnchor="middle" fontFamily="IBM Plex Mono">{shortDate(p.date)}</text>
         ))}
 
         {hover != null && (
           <g>
-            <line x1={x(hover)} x2={x(hover)} y1={PAD.t} y2={H - PAD.b} stroke="#0e1b2a" strokeOpacity="0.25" />
-            {hp?.value != null && <circle cx={x(hover)} cy={y(hp.value)} r="3.5" fill={hover >= todayIdx ? '#1e6a8d' : '#0e1b2a'} />}
-            {hSim && <circle cx={x(hover)} cy={y(hSim.value)} r="3.5" fill="#6a3fae" />}
+            <line x1={x(hover)} x2={x(hover)} y1={PAD.t} y2={H - PAD.b} stroke="var(--ink)" strokeOpacity="0.25" />
+            {hp?.value != null && <circle cx={x(hover)} cy={y(hp.value)} r="3.5" fill={hover >= todayIdx ? 'var(--river)' : 'var(--ink)'} />}
+            {hSim && <circle cx={x(hover)} cy={y(hSim.value)} r="3.5" fill="var(--sim)" />}
           </g>
         )}
       </svg>
       {hover != null && hp && (
         <div style={{
           position: 'absolute', top: 8, left: Math.min(Math.max(x(hover) / W * 100, 8), 70) + '%',
-          background: '#0e1b2a', color: '#fff', padding: '6px 9px', borderRadius: 6, fontSize: 12, pointerEvents: 'none', whiteSpace: 'nowrap',
+          background: 'var(--ink)', color: 'var(--surface)', padding: '6px 9px', borderRadius: 6, fontSize: 12, pointerEvents: 'none', whiteSpace: 'nowrap',
         }}>
           <div className="mono" style={{ opacity: 0.7, fontSize: 11 }}>{shortDate(hp.date)} · {hover >= todayIdx ? 'forecast' : 'observed'}</div>
           <div className="mono">Live: {m3s(hp.value)}</div>

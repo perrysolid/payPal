@@ -71,11 +71,11 @@ export default function Detail({ district: d, forecast: fc, config, busy, action
           ) : fc === undefined ? <div className="skeleton" style={{ height: 280 }} /> : <div className="empty">Forecast data unavailable for this district.</div>}
         </div>
         <div className="chart-legend">
-          <span className="lg"><i style={{ borderColor: '#0e1b2a' }} />Observed (30 days)</span>
-          <span className="lg"><i style={{ borderColor: '#1e6a8d', borderTopStyle: 'dashed' }} />Live forecast (7 days)</span>
-          {simSeries && <span className="lg"><i style={{ borderColor: '#6a3fae', borderTopWidth: 3 }} />Scenario forecast</span>}
-          <span className="lg"><i style={{ borderColor: '#667180', borderTopStyle: 'dashed' }} />Baseline (median)</span>
-          <span className="lg"><i style={{ borderColor: '#b0411e' }} />Danger threshold</span>
+          <span className="lg"><i style={{ borderColor: 'var(--ink)' }} />Observed (30 days)</span>
+          <span className="lg"><i style={{ borderColor: 'var(--river)', borderTopStyle: 'dashed' }} />Live forecast (7 days)</span>
+          {simSeries && <span className="lg"><i style={{ borderColor: 'var(--sim)', borderTopWidth: 3 }} />Scenario forecast</span>}
+          <span className="lg"><i style={{ borderColor: 'var(--muted)', borderTopStyle: 'dashed' }} />Baseline (median)</span>
+          <span className="lg"><i style={{ borderColor: 'var(--danger)' }} />Danger threshold</span>
         </div>
 
         <div className="kpis">
@@ -107,7 +107,6 @@ function ActionPanel({ d, fc, config, busy, actions }) {
     <div className="panel actions" style={{ gap: 0 }}>
       <div className="action-block">
         <div className="action-title"><span><span className="eyebrow" style={{ marginRight: 6 }}>01</span>Pledge</span><span className="muted mono" style={{ fontSize: 11.5 }}>Held {usd(d.totals.heldCents)}</span></div>
-        <p className="action-help">{d.status === 'TRIGGERED' ? <>Aid is being paid now. Your donation is <b>charged immediately</b> and split equally among verified households in {d.shortName}.</> : <>Your pledge is <b>authorized, not charged</b>. It is captured only if {d.shortName} crosses its danger threshold; otherwise it is voided.</>}</p>
         {pledgeOpen ? (
           <>
             <div className="amounts" role="group" aria-label="Pledge amount">
@@ -138,26 +137,24 @@ function ActionPanel({ d, fc, config, busy, actions }) {
             )}
           </>
         ) : (
-          <div className="closed-note">Pledging is closed: this watch window was released.</div>
+          <div className="closed-note">Pledging closed.</div>
         )}
       </div>
 
       {d.kind !== 'live' && <>
       <div className="action-block">
         <div className="action-title"><span><span className="eyebrow" style={{ marginRight: 6 }}>02</span>Flood scenario</span>{d.scenario && <span className="tag-sim">Active</span>}</div>
-        <p className="action-help">Overlays a flood surge on the current forecast, peaking at {d.scenario?.targetRatio ?? 2.35}× the 30-day median, to rehearse the trigger and settlement. The live forecast is unchanged.</p>
         {open ? (
           <button type="button" className={`btn sim ${d.scenario ? 'on' : ''}`} disabled={anyBusy || !fc?.live?.series} onClick={() => actions.scenario(!d.scenario)}>
             {busy === 'scenario' ? <span className="spinner" /> : null}{d.scenario ? 'Clear scenario' : 'Run flood scenario'}
           </button>
         ) : (
-          <div className="closed-note">{d.trigger?.simulated ? 'Triggered under a scenario. Use Reset to run it again.' : 'Scenarios are available while the district is watching.'}</div>
+          <div className="closed-note">Scenarios unavailable.</div>
         )}
       </div>
 
       <div className="action-block">
         <div className="action-title"><span><span className="eyebrow" style={{ marginRight: 6 }}>03</span>Evaluate trigger</span></div>
-        <p className="action-help">Compares the forecast peak with the 30-day median. At {d.threshold.toFixed(2)}× or above, held pledges are captured into the aid pool, registration opens for affected households and a risk assessment is issued.</p>
         <button type="button" className="btn" disabled={d.status === 'RELEASED' || anyBusy} onClick={actions.evaluate}>
           {busy === 'evaluate' ? <span className="spinner" /> : null}{d.status === 'TRIGGERED' ? 'Re-check settlement' : 'Evaluate now'}
         </button>
@@ -173,7 +170,6 @@ function ActionPanel({ d, fc, config, busy, actions }) {
 
       <div className="action-block">
         <div className="action-title"><span><span className="eyebrow" style={{ marginRight: 6 }}>04</span>Release pledges</span></div>
-        <p className="action-help">Closes the watch window without a trigger. All held authorizations for {d.shortName} only are voided and donors are not charged. Watch window ends {new Date(d.watchEndsAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}.</p>
         <button type="button" className="btn secondary" disabled={!open || anyBusy} onClick={actions.release}>
           {busy === 'release' ? <span className="spinner" /> : null}Release and void held pledges
         </button>

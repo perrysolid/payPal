@@ -8,17 +8,22 @@ ModuleRegistry.registerModules([AllCommunityModule]);
 const theme = themeQuartz.withParams({
   fontFamily: 'IBM Plex Sans, system-ui, sans-serif',
   fontSize: 12.5,
-  headerFontSize: 12,
+  headerFontSize: 11,
+  headerTextColor: '#8fa6b8',
+  wrapperBorder: false,
+  columnBorder: false,
+  rowBorder: { color: '#142231' },
   headerFontWeight: 600,
-  foregroundColor: '#0e1b2a',
-  headerBackgroundColor: '#faf9f5',
-  backgroundColor: '#ffffff',
-  borderColor: '#ece9e0',
-  rowHoverColor: '#f5f8fa',
-  accentColor: '#1e6a8d',
-  oddRowBackgroundColor: '#fdfcfa',
-  rowHeight: 36,
-  headerHeight: 36,
+  foregroundColor: '#e8f1f7',
+  headerBackgroundColor: '#0b1621',
+  backgroundColor: '#0e1a27',
+  borderColor: '#1c2d3d',
+  rowHoverColor: '#13283a',
+  accentColor: '#4fb3d9',
+  oddRowBackgroundColor: '#0c1823',
+  browserColorScheme: 'dark',
+  rowHeight: 42,
+  headerHeight: 40,
   wrapperBorderRadius: 0,
   wrapperBorder: false,
   spacing: 6,
@@ -135,7 +140,7 @@ export default function Ledger({ rows, api, onError }) {
         </div>
       )}
       <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 18px', borderBottom: '1px solid var(--line-2)', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-        <span className="muted" style={{ fontSize: 12.5 }}>{rows.length} ledger entries · authorizations, captures, voids, payouts and household allocations</span>
+        <span className="muted" style={{ fontSize: 12.5 }}>{rows.length} entries</span>
         <div className="grid-tools">
           <label className="toggle"><input type="checkbox" checked={grouped} onChange={(e) => setGrouped(e.target.checked)} />Group by district</label>
           <button type="button" className="btn secondary" onClick={exportCsv}>Export CSV</button>
