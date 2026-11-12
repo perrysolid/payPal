@@ -1,7 +1,9 @@
-import React from 'react';
+import React, { Suspense, lazy } from 'react';
 
-export default function Assessment({ district: d }) {
-  const ev = d.trigger ? { ...d.lastEvaluation, assessment: d.trigger.assessment, simulated: d.trigger.simulated } : d.lastEvaluation;
+const Schedule = lazy(() => import('./Schedule.jsx'));
+
+export default function Assessment({ district: d, licenseKey }) {
+  const ev = d.trigger ? { ...(d.lastEvaluation || { valid: true }), assessment: d.trigger.assessment, simulated: d.trigger.simulated } : d.lastEvaluation;
   if (!ev) return null;
   if (!ev.valid) {
     return <div className="panel" style={{ marginTop: 16 }}><div className="inline-error">Evaluation could not run: {ev.issues?.join('; ')}. No trigger decision was made and no money moved.</div></div>;
@@ -12,7 +14,6 @@ export default function Assessment({ district: d }) {
   const minH = Math.min(0, ...steps.map((s) => s.startHourOffset));
   const maxH = Math.max(24, ...steps.map((s) => s.startHourOffset + s.durationHours));
   const span = maxH - minH;
-  const totalW = d.households.reduce((acc, h) => acc + (a.zoneWeights[h.zone] ?? 0) * h.members, 0);
 
   return (
     <div className="assess">
@@ -30,27 +31,16 @@ export default function Assessment({ district: d }) {
             <div className="alert-box"><div className="eyebrow">Alert · English</div><p>{a.alertEnglish}</p></div>
             <div className="alert-box local" lang={d.language.code} dir={d.language.dir || 'ltr'}><div className="eyebrow">Alert · {d.language.name}</div><p>{a.alertLocal}</p></div>
           </div>
-          <div style={{ marginTop: 14 }}>
-            <div className="eyebrow" style={{ marginBottom: 6 }}>Allocation weights by risk zone</div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              {['A', 'B', 'C'].map((z) => {
-                const members = d.households.filter((h) => h.zone === z).reduce((s, h) => s + h.members, 0);
-                const share = totalW ? ((a.zoneWeights[z] * members) / totalW) * 100 : 0;
-                return (
-                  <div key={z} className="alert-box" style={{ flex: '1 1 120px' }}>
-                    <span className={`zone-pill ${z}`}>Zone {z}</span>
-                    <div className="mono" style={{ fontSize: 16, marginTop: 4 }}>{a.zoneWeights[z].toFixed(2)}</div>
-                    <div className="muted" style={{ fontSize: 11.5 }}>{members} people · {share.toFixed(1)}% of funds</div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
         </div>
       </div>
 
       <div className="panel">
-        <div className="panel-head"><span className="panel-title">Response timeline</span><span className="muted" style={{ fontSize: 12 }}>hours from assessment</span></div>
+        <div className="panel-head"><span className="panel-title">Response and payment schedule</span><span className="muted" style={{ fontSize: 12 }}>Bryntum Scheduler</span></div>
+        {licenseKey && d.trigger ? (
+          <Suspense fallback={<div className="muted" style={{ padding: 18 }}><span className="spinner" /> Loading schedule…</div>}>
+            <Schedule district={d} assessment={a} licenseKey={licenseKey} />
+          </Suspense>
+        ) : (
         <div className="timeline">
           <div className="tl-axis">{[0, 0.25, 0.5, 0.75, 1].map((f) => <span key={f}>{Math.round(minH + f * span)}h</span>)}</div>
           {steps.map((s, i) => (
@@ -62,6 +52,7 @@ export default function Assessment({ district: d }) {
             </div>
           ))}
         </div>
+        )}
       </div>
     </div>
   );

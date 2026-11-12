@@ -3,7 +3,7 @@ import { api } from './api.js';
 import Board from './components/Board.jsx';
 import Detail from './components/Detail.jsx';
 import Assessment from './components/Assessment.jsx';
-import Settlement from './components/Settlement.jsx';
+import Aid from './components/Aid.jsx';
 import Ledger from './components/Ledger.jsx';
 import { usd, ratio } from './format.js';
 
@@ -53,6 +53,7 @@ export default function App() {
   const [forecasts, setForecasts] = useState({});
   const [selected, setSelected] = useState('sylhet');
   const [area, setArea] = useState('All');
+  const [registerToken, setRegisterToken] = useState(null);
   const [busy, setBusy] = useState(null);
   const [toasts, setToasts] = useState([]);
   const [fatal, setFatal] = useState(null);
@@ -64,6 +65,8 @@ export default function App() {
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), ms);
   }, []);
   const toastError = useCallback((e) => toast(e.message || String(e), 'error', 9000), [toast]);
+  // eslint-disable-next-line no-inner-declarations
+  function alertError(m) { toast(`PayPal sign-in: ${m}`, 'error', 10000); }
 
   const loadState = useCallback(async () => {
     try { setSnap(await api.state()); } catch (e) { setFatal(e.message); }
@@ -85,6 +88,10 @@ export default function App() {
         setConfig(c);
         setSnap(s);
         s.districts.forEach((d) => loadForecast(d.id));
+        const q = new URLSearchParams(window.location.search);
+        if (q.get('register') && q.get('district')) { setSelected(q.get('district')); setRegisterToken(q.get('register')); }
+        if (q.get('register_error')) setFatal(null), setTimeout(() => alertError(q.get('register_error')), 0);
+        if (q.toString()) window.history.replaceState(null, '', '/');
       } catch (e) {
         setFatal(e.message);
       }
@@ -135,7 +142,7 @@ export default function App() {
       const sim = r.district.trigger?.simulated || r.district.lastEvaluation?.simulated;
       const tag = sim ? ' (scenario)' : '';
       if (r.outcome === 'TRIGGERED') {
-        toast(`${d.shortName} triggered${tag}. ${usd(r.district.trigger.capturedCents)} captured; partner payout ${r.district.trigger.payouts.at(-1)?.createState === 'CREATED' ? 'initiated' : 'not initiated'}.`, 'info', 9000);
+        toast(`${d.shortName} triggered${tag}. ${usd(r.district.aid.capturedCents)} captured into the aid pool; household registration is open.`, 'info', 9000);
       } else if (r.outcome === 'BELOW_THRESHOLD') {
         toast(`${d.shortName}: ${ratio(r.district.lastEvaluation.evaluation.ratio)} is below the ${d.threshold.toFixed(2)}× threshold${tag}. Pledges remain held.`);
       } else if (r.outcome === 'ALREADY_TRIGGERED') {
@@ -173,9 +180,9 @@ export default function App() {
       <main>
         <section className="hero">
           <div>
-            <div className="eyebrow" style={{ marginBottom: 6 }}>Forecast-triggered relief funding · Global river basins</div>
-            <h1>Pledge now. Pay only if the river forecast crosses the danger line.</h1>
-            <p>Donors place a hold for a district. Floodgate tracks the GloFAS river-discharge forecast and, when a district crosses its danger threshold, captures the held pledges and pays the district’s relief partner ahead of the peak. If the threshold is not reached, every hold is released.</p>
+            <div className="eyebrow" style={{ marginBottom: 6 }}>Direct disaster aid · see exactly whom you helped</div>
+            <h1>Give before the disaster. See exactly whom you helped.</h1>
+            <p>Pledge to an at-risk area with a PayPal hold. When the river forecast crosses the danger line, or a GDACS alert confirms an earthquake, wildfire or cyclone, the money goes straight to verified households who sign in with PayPal: no intermediary, 0% fee, every payment on a public ledger. If nothing happens, your hold is released.</p>
             <p className="muted mono" style={{ fontSize: 12, marginTop: 10 }}>Across all districts: {usd(totals.held)} held · {usd(totals.cap)} captured</p>
           </div>
           <Stepper d={d} pledgeCount={pledgeCount} />
@@ -191,10 +198,10 @@ export default function App() {
         </div>
         <Board districts={area === 'All' ? snap.districts : snap.districts.filter((x) => x.area === area)} forecasts={forecasts} selected={selected} onSelect={(id) => { setSelected(id); detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} />
 
-        <div ref={detailRef} className="section-head" style={{ scrollMarginTop: 70 }}><h2>District detail</h2><span className="sub">Relief partner: {d.partner.name}</span></div>
+        <div ref={detailRef} className="section-head" style={{ scrollMarginTop: 70 }}><h2>District detail</h2><span className="sub">{d.kind === 'live' ? 'Live event · direct aid' : `${d.river} · direct aid to verified households`}</span></div>
         <Detail district={d} forecast={fc} config={config} busy={busy} actions={actions} onRefreshForecast={() => loadForecast(selected, true)} />
-        <Assessment district={d} />
-        <Settlement district={d} webhooks={snap.webhooks} pledges={snap.pledges} busy={busy === 'payouts'} onRefresh={() => run('payouts', () => api.refreshPayouts(selected))} />
+        <Assessment district={d} licenseKey={config.bryntumLicenseKey} />
+        <Aid district={d} config={config} api={api} busy={busy} run={run} toast={toast} webhooks={snap.webhooks} registerToken={registerToken && d.id === selected ? registerToken : null} clearRegister={() => setRegisterToken(null)} />
 
         <div className="section-head"><h2>Financial ledger</h2><span className="sub">Every authorization, capture, void, payout and allocation</span></div>
         <Ledger rows={snap.ledger} api={api} onError={toastError} />

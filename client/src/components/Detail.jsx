@@ -31,7 +31,7 @@ export default function Detail({ district: d, forecast: fc, config, busy, action
       <div className="panel">
         <div className="panel-head">
           <div style={{ minWidth: 0 }}>
-            <div className="eyebrow">{d.basin} basin · {d.region}, {d.country}</div>
+            <div className="eyebrow">{d.kind === 'live' ? `${d.hazard} · GDACS ${d.event?.alertLevel} alert · ${d.country}` : `${d.basin} basin · ${d.region}, ${d.country}`}</div>
             <h3 className="detail-title">{d.name}</h3>
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -40,6 +40,17 @@ export default function Detail({ district: d, forecast: fc, config, busy, action
           </div>
         </div>
 
+        {d.kind === 'live' ? (
+          <div className="panel-pad">
+            <p className="rationale" style={{ marginTop: 0 }}>{d.event?.severity}. GDACS rated this event <b>{d.event?.alertLevel}</b>, so a direct-aid campaign opened automatically. Earthquakes and wildfires cannot be forecast; donations made now are charged immediately and paid to verified households within {d.radiusKm} km.</p>
+            <div className="kpis">
+              <div className="kpi"><div className="l">Event</div><div className="v" style={{ fontSize: 15 }}>{d.event?.type} {d.event?.eventId}</div></div>
+              <div className="kpi"><div className="l">Started</div><div className="v" style={{ fontSize: 15 }}>{d.event?.startedAt ? new Date(d.event.startedAt).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'}</div></div>
+              <div className="kpi"><div className="l">Coverage radius</div><div className="v" style={{ fontSize: 15 }}>{d.radiusKm} km</div></div>
+              <div className="kpi"><div className="l">Source</div><div className="v" style={{ fontSize: 15 }}><a href={d.event?.url} target="_blank" rel="noreferrer">GDACS report</a></div></div>
+            </div>
+          </div>
+        ) : (<>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 18px 0', gap: 10, flexWrap: 'wrap' }}>
           <div className="chart-tabs" role="tablist" aria-label="Forecast view">
             <button type="button" className={effectiveView === 'live' ? 'on' : ''} onClick={() => setView('live')} disabled={!fc?.live?.series}>Live forecast</button>
@@ -73,6 +84,7 @@ export default function Detail({ district: d, forecast: fc, config, busy, action
           <div className="kpi"><div className="l">Ratio {isSim && <span className="tag-sim" style={{ fontSize: 9 }}>Scenario</span>}</div><div className={`v ${ev?.trigger ? 'hot' : ''}`}>{ratio(ev?.ratio)}</div></div>
           <div className="kpi"><div className="l">Danger threshold</div><div className="v">{d.threshold.toFixed(2)}×</div></div>
         </div>
+        </>)}
       </div>
 
       <ActionPanel d={d} fc={fc} config={config} busy={busy} actions={actions} />
@@ -85,7 +97,8 @@ function ActionPanel({ d, fc, config, busy, actions }) {
   const [donor, setDonor] = useState('');
   const pledgeRef = useRef();
   pledgeRef.current = { districtId: d.id, amount, donorName: donor };
-  const open = d.status === 'WATCHING';
+  const open = d.status === 'WATCHING' && d.kind !== 'live';
+  const pledgeOpen = d.status !== 'RELEASED';
   const amountValid = /^\d{1,4}(\.\d{1,2})?$/.test(amount) && Number(amount) >= 1 && Number(amount) <= 1000;
   const isMock = config.paymentMode !== 'paypal';
   const anyBusy = Boolean(busy);
@@ -94,8 +107,8 @@ function ActionPanel({ d, fc, config, busy, actions }) {
     <div className="panel actions" style={{ gap: 0 }}>
       <div className="action-block">
         <div className="action-title"><span><span className="eyebrow" style={{ marginRight: 6 }}>01</span>Pledge</span><span className="muted mono" style={{ fontSize: 11.5 }}>Held {usd(d.totals.heldCents)}</span></div>
-        <p className="action-help">Your pledge is <b>authorized, not charged</b>. It is captured only if {d.shortName} crosses its danger threshold; otherwise it is voided.</p>
-        {open ? (
+        <p className="action-help">{d.status === 'TRIGGERED' ? <>Aid is being paid now. Your donation is <b>charged immediately</b> and split equally among verified households in {d.shortName}.</> : <>Your pledge is <b>authorized, not charged</b>. It is captured only if {d.shortName} crosses its danger threshold; otherwise it is voided.</>}</p>
+        {pledgeOpen ? (
           <>
             <div className="amounts" role="group" aria-label="Pledge amount">
               {PRESETS.map((p) => <button type="button" key={p} className={amount === p ? 'on' : ''} onClick={() => setAmount(p)}>${p.replace('.00', '')}</button>)}
@@ -125,10 +138,11 @@ function ActionPanel({ d, fc, config, busy, actions }) {
             )}
           </>
         ) : (
-          <div className="closed-note">Pledging is closed: this watch window has {d.status === 'TRIGGERED' ? 'triggered' : 'been released'}.</div>
+          <div className="closed-note">Pledging is closed: this watch window was released.</div>
         )}
       </div>
 
+      {d.kind !== 'live' && <>
       <div className="action-block">
         <div className="action-title"><span><span className="eyebrow" style={{ marginRight: 6 }}>02</span>Flood scenario</span>{d.scenario && <span className="tag-sim">Active</span>}</div>
         <p className="action-help">Overlays a flood surge on the current forecast, peaking at {d.scenario?.targetRatio ?? 2.35}× the 30-day median, to rehearse the trigger and settlement. The live forecast is unchanged.</p>
@@ -143,7 +157,7 @@ function ActionPanel({ d, fc, config, busy, actions }) {
 
       <div className="action-block">
         <div className="action-title"><span><span className="eyebrow" style={{ marginRight: 6 }}>03</span>Evaluate trigger</span></div>
-        <p className="action-help">Compares the forecast peak with the 30-day median. At {d.threshold.toFixed(2)}× or above, held pledges are captured, the relief partner is paid and a risk assessment is issued.</p>
+        <p className="action-help">Compares the forecast peak with the 30-day median. At {d.threshold.toFixed(2)}× or above, held pledges are captured into the aid pool, registration opens for affected households and a risk assessment is issued.</p>
         <button type="button" className="btn" disabled={d.status === 'RELEASED' || anyBusy} onClick={actions.evaluate}>
           {busy === 'evaluate' ? <span className="spinner" /> : null}{d.status === 'TRIGGERED' ? 'Re-check settlement' : 'Evaluate now'}
         </button>
@@ -151,7 +165,7 @@ function ActionPanel({ d, fc, config, busy, actions }) {
           <ul className="progress-list" aria-live="polite">
             <li className="on"><span className="spinner" />Checking forecast against threshold</li>
             <li>Capturing held authorizations if triggered</li>
-            <li>Initiating relief-partner payout</li>
+            <li>Opening household registration</li>
             <li>Preparing risk assessment</li>
           </ul>
         )}
@@ -164,6 +178,7 @@ function ActionPanel({ d, fc, config, busy, actions }) {
           {busy === 'release' ? <span className="spinner" /> : null}Release and void held pledges
         </button>
       </div>
+      </>}
     </div>
   );
 }
