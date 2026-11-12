@@ -145,7 +145,7 @@ How the boundary is enforced (`server/ai.js`):
 1. Push this repository to GitHub.
 2. In Render, choose **New → Blueprint** and select the repository.
 3. Set `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `ANTHROPIC_API_KEY` and, optionally, `PAYPAL_PAYOUT_RECIPIENT_EMAIL`.
-4. Render runs `npm ci --include=dev && npm run build`, then `npm start`. The health check is `/api/health`.
+4. Render runs `npm install --include=dev && npm run build` on Node 24, then `npm start`. The health check is `/api/health`.
 
 State is held in memory, so a restart or a free-tier spin-down clears the demo state. This is equivalent to `POST /api/reset`.
 
