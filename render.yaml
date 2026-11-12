@@ -17,3 +17,5 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
+      - key: ANTHROPIC_MODEL
+        value: claude-haiku-5-5

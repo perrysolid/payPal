@@ -32,7 +32,7 @@ export function loadConfig(env = process.env) {
       ? { clientId: paypalId, clientSecret: paypalSecret, baseUrl: 'https://api-m.sandbox.paypal.com' }
       : null,
     payoutRecipientOverride: payoutOverride,
-    ai: anthropicKey ? { apiKey: anthropicKey, model: 'claude-opus-5-5' } : null,
+    ai: anthropicKey ? { apiKey: anthropicKey, model: clean(env.ANTHROPIC_MODEL) || 'claude-haiku-5-5' } : null,
     warnings,
   };
 }

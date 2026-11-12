@@ -2,7 +2,7 @@
 // drafts response timelines. It never decides the trigger, never sets an amount, and
 // never moves money. Every output is validated with Zod before use.
 import Anthropic from '@anthropic-ai/sdk';
-import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
+import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { z } from 'zod';
 import { ZONE_DESCRIPTIONS } from './data/districts.js';
 
@@ -185,15 +185,13 @@ export function templateAssessment({ district, evaluation, simulated }) {
 
 export function createAiService(aiConfig) {
   const client = aiConfig ? new Anthropic({ apiKey: aiConfig.apiKey, timeout: AI_TIMEOUT_MS, maxRetries: 1 }) : null;
-  const model = aiConfig?.model ?? 'claude-opus-5-5';
+  const model = aiConfig?.model ?? 'claude-haiku-5-5';
 
   async function structuredCall({ system, user, schema, effort, maxTokens }) {
-    const response = await client.beta.messages.parse({
+    const response = await client.messages.parse({
       model,
       max_tokens: maxTokens,
-      betas: ['server-side-fallback-2026-07-01'],
-      fallbacks: 'default',
-      output_config: { effort, format: betaZodOutputFormat(schema) },
+      output_config: { effort, format: zodOutputFormat(schema) },
       system,
       messages: [{ role: 'user', content: user }],
     });

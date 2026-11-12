@@ -56,7 +56,7 @@ Flood forecasts for the Brahmaputra, Surma and Koshi basins often arrive days be
 └──────┬──────────────────────┬──────────────────────────┬────────────────┘
        │                      │                          │
  Open-Meteo Flood API   PayPal Sandbox               Anthropic API
- (GloFAS discharge)     Orders v2, Payments v2,      claude-opus-5-5
+ (GloFAS discharge)     Orders v2, Payments v2,      claude-haiku-5-5
                         Payouts v1
 ```
 
@@ -67,7 +67,7 @@ One deployable service: in production Express serves the built React app from `d
 - **Backend:** Node.js 20+, Express 5, ES modules, Zod
 - **Frontend:** React 19, Vite, AG Grid Community 36, hand-built SVG chart (no chart dependency)
 - **Payments:** `@paypal/paypal-server-sdk` (APIMatic-generated) plus the PayPal Payouts REST API
-- **AI:** `@anthropic-ai/sdk`, model `claude-opus-5-5`, structured outputs
+- **AI:** `@anthropic-ai/sdk`, model `claude-haiku-5-5` (override with `ANTHROPIC_MODEL`), structured outputs
 - **Data:** Open-Meteo Flood API (GloFAS v4 river discharge)
 - **Tests:** Vitest (financial invariants, trigger maths, AI output guards)
 - **Hosting:** Render (`render.yaml`)
@@ -115,12 +115,12 @@ One deployable service: in production Express serves the built React app from `d
 
 How the boundary is enforced (`server/ai.js`):
 
-- One call per valid evaluation through `client.beta.messages.parse` with a Zod output schema (`betaZodOutputFormat`). Effort is set to `low` for latency. No temperature, top_p or thinking budget is sent.
+- One call per valid evaluation through `client.messages.parse` with a Zod output schema (`zodOutputFormat`). Effort is set to `low` for latency. No temperature, top_p or thinking budget is sent.
 - `stop_reason` must be `end_turn` before the output is used. The parsed output is checked again against a stricter Zod schema (ranges, word count, 4 to 6 steps), and a regex confirms the local alert is in the expected Unicode script.
 - If Claude's severity disagrees with the deterministic verdict, the verdict wins.
 - Code computes the money: `share = zoneWeight × members`, apportioned in integer cents.
 - Ask the Ledger: every column and operator is checked against an explicit allowlist (`Object.hasOwn`, so prototype keys are rejected). The client only applies a validated AG Grid filter model. No model-generated code or expressions are run.
-- Server-side refusal fallback is enabled (`fallbacks: "default"`, beta `server-side-fallback-2026-07-01`). The label shows which model served the response.
+- A refusal or any non-`end_turn` stop is treated as a failure and falls back to the template below.
 - **Fallback:** without `ANTHROPIC_API_KEY`, or on any API, validation or refusal failure, Floodgate uses a fixed deterministic template with equal zone weights, labelled **AI OFFLINE — TEMPLATE RESPONSE** along with the reason. Ask the Ledger falls back to a keyword parser labelled **AI OFFLINE — KEYWORD MATCH**. Template output is never presented as Claude's.
 
 ## 8. AG Grid usage
@@ -165,6 +165,7 @@ npm run build && npm start  # production build served on :8787
 | `PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET` | For Sandbox mode | PayPal Sandbox REST app. If missing, MOCK MODE is used. |
 | `PAYPAL_PAYOUT_RECIPIENT_EMAIL` | Optional | Sends all relief-partner payouts to one Sandbox personal account so items can reach `SUCCESS`. Without it, payouts go to fictional `.example` addresses and PayPal reports them as `UNCLAIMED`. |
 | `ANTHROPIC_API_KEY` | For AI | Claude assessment and Ask the Ledger. If missing, template responses are used. |
+| `ANTHROPIC_MODEL` | Optional | Defaults to `claude-haiku-5-5`. |
 | `PORT` | Optional | Defaults to 8787. |
 
 ## 12. PayPal Sandbox test accounts
