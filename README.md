@@ -2,6 +2,8 @@
 
 **Disaster relief that moves before the flood arrives.**
 
+**Live app:** https://floodgate-5udu.onrender.com (Render free tier: the first request after idle can take about 50 seconds; restarts clear in-memory records.)
+
 Floodgate is a forecast-triggered relief funding platform for flood-prone districts in South Asia. Donors pledge to a district with a PayPal **authorization** (a hold, not a charge). Floodgate watches the GloFAS river-discharge forecast. If a deterministic engine sees the forecast cross the district's danger threshold, the held pledges are **captured** and a **PayPal Payout** goes to the district's relief partner. Claude then explains the risk in plain language and in the local script. If the watch window closes without a trigger, the holds are **voided** and nobody is charged.
 
 > **Sandbox demonstration.** Every financial transaction runs in the PayPal Sandbox and no real money moves. Relief partners, payout emails and households are fictional **SAMPLE DATA**. Replay scenarios are synthetic and are never real forecasts. See [Limitations and disclaimers](#16-limitations-and-regulatory-disclaimers).
