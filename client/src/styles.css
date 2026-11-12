@@ -326,3 +326,7 @@ footer ul { margin: 6px 0 0; padding-left: 18px; }
 .wh-line { display: flex; gap: 8px; align-items: center; padding: 8px 18px; border-top: 1px solid var(--line-2); font-size: 12.5px; color: var(--ink-2); flex-wrap: wrap; }
 .wh-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok, #2f7d4f); display: inline-block; }
 .wh-dot.off { background: var(--muted); }
+.alloc td { overflow-wrap: normal; }
+.alloc td:first-child { overflow-wrap: anywhere; }
+.wh-line { flex-wrap: nowrap; align-items: flex-start; }
+.wh-dot { flex-shrink: 0; margin-top: 6px; }
