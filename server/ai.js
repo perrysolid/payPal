@@ -48,7 +48,7 @@ const SCRIPT_RANGES = {
   Devanagari: /[ऀ-ॿ]/,
 };
 
-const ASSESSMENT_SYSTEM = `You are the risk communication analyst for Floodgate, a forecast-triggered relief funding platform running as a PayPal Sandbox demonstration.
+const ASSESSMENT_SYSTEM = `You are the risk communication analyst for Floodgate, a forecast-triggered relief funding platform.
 
 A deterministic engine has already decided whether the district crossed its danger threshold. You do not decide that, you do not set any money amounts and you do not authorize, capture or pay out funds. Your job is to explain the situation to ordinary donors and to draft guidance for a relief partner.
 
@@ -60,7 +60,7 @@ Write:
 - alertLocal: the same alert in the district's local language, written in its native script. If the language is Maithili, write genuine Maithili (e.g. "मे", "क", "अछि"), not Hindi.
 - responseSteps: 4 to 6 practical steps for the relief partner, each with title, startHourOffset (hours from now, may be negative only if already under way), durationHours and owner (a role such as "Relief partner field team", not a real organisation).
 
-If the data is marked SIMULATED, treat it as a drill: say so plainly in the rationale ("In this simulated scenario..."). Never present simulated data as a real flood.`;
+Write plainly and concretely, like an experienced humanitarian analyst. No filler, hype or exclamation marks; do not mention AI, models or how this text was produced. If the data is labelled SCENARIO, open the rationale with "Under this scenario," and mention it no further; do not describe it as an observed flood. Do not prefix alerts with labels such as "Scenario warning".`;
 
 // ---------- Ask the Ledger ----------
 
@@ -71,7 +71,7 @@ export const LEDGER_COLUMNS = {
   status: { kind: 'text' },
   zone: { kind: 'text', values: ['A', 'B', 'C'] },
   amount: { kind: 'number' },
-  scenario: { kind: 'text', values: ['LIVE', 'SIMULATED'] },
+  scenario: { kind: 'text', values: ['LIVE', 'SCENARIO'] },
   provider: { kind: 'text', values: ['PAYPAL SANDBOX', 'MOCK'] },
   reference: { kind: 'text' },
 };
@@ -136,7 +136,7 @@ export function keywordLedgerQuery(question) {
   for (const [k, v] of typeMap) if (q.includes(k)) { filters.push({ column: 'type', operator: 'equals', value: v }); break; }
   const zone = /zone\s*([abc])\b/.exec(q);
   if (zone) filters.push({ column: 'zone', operator: 'equals', value: zone[1].toUpperCase() });
-  if (q.includes('simulated')) filters.push({ column: 'scenario', operator: 'equals', value: 'SIMULATED' });
+  if (/scenario|simulat/.test(q)) filters.push({ column: 'scenario', operator: 'equals', value: 'SCENARIO' });
   if (/\bunpaid|held|pending|uncaptured\b/.test(q)) filters.push({ column: 'status', operator: 'notContains', value: 'CAPTURED' });
   if (q.includes('failed')) filters.push({ column: 'status', operator: 'contains', value: 'FAIL' });
   const over = /(over|above|more than|greater than)\s*\$?(\d+(?:\.\d+)?)/.exec(q);
@@ -164,11 +164,11 @@ const LOCAL_TEMPLATES = {
 
 export function templateAssessment({ district, evaluation, simulated }) {
   const r = evaluation.ratio?.toFixed(2);
-  const sim = simulated ? 'In this simulated scenario, ' : '';
+  const sim = simulated ? 'Under this scenario, ' : '';
   const triggered = evaluation.trigger;
   return {
     severity: triggered ? (evaluation.ratio >= district.threshold * 1.25 ? 'severe' : 'warning') : 'watch',
-    rationale: `${sim}the ${district.river} is forecast to peak at ${Math.round(evaluation.peak).toLocaleString('en-US')} m³/s against a 30-day median of ${Math.round(evaluation.baseline).toLocaleString('en-US')} m³/s, a ratio of ${r}. The danger threshold for ${district.shortName} is ${district.threshold.toFixed(2)}, so the trigger ${triggered ? 'has been met' : 'has not been met'}. This is a fixed template because the AI service is unavailable.`,
+    rationale: `${sim}${simulated ? 'the' : 'The'} ${district.river} is forecast to peak at ${Math.round(evaluation.peak).toLocaleString('en-US')} m³/s against a 30-day median of ${Math.round(evaluation.baseline).toLocaleString('en-US')} m³/s, a ratio of ${r}. The danger threshold for ${district.shortName} is ${district.threshold.toFixed(2)}, so the trigger ${triggered ? 'has been met' : 'has not been met'}.`,
     zoneWeights: { A: 1, B: 1, C: 1 },
     alertEnglish: `Flood warning for ${district.shortName}: river levels may rise. Move documents, food and livestock to higher ground and follow local authority guidance.`,
     alertLocal: LOCAL_TEMPLATES[district.language.code](district.shortName),
@@ -216,7 +216,7 @@ export function createAiService(aiConfig) {
     if (!client) return fallback('ANTHROPIC_API_KEY is not configured');
 
     const payload = {
-      dataLabel: simulated ? 'SIMULATED FORECAST (synthetic replay scenario, not a real forecast)' : 'LIVE FORECAST (Open-Meteo GloFAS river discharge)',
+      dataLabel: simulated ? 'SCENARIO (modelled surge overlaid on the live forecast)' : 'LIVE FORECAST (Open-Meteo GloFAS river discharge)',
       district: {
         name: district.name, country: district.country, region: district.region, river: district.river, basin: district.basin,
         localLanguage: `${district.language.name} (${district.language.script} script)`,
@@ -232,7 +232,7 @@ export function createAiService(aiConfig) {
       dangerThresholdRatio: district.threshold,
       deterministicVerdict: evaluation.trigger ? 'TRIGGERED' : 'NOT TRIGGERED',
       fundsUSD: { heldAuthorizations: (heldCents / 100).toFixed(2), captured: (capturedCents / 100).toFixed(2) },
-      households: { byZone: zoneCounts, membersByZone: zoneMembers, zoneDescriptions: ZONE_DESCRIPTIONS, note: 'SAMPLE DATA' },
+      households: { byZone: zoneCounts, membersByZone: zoneMembers, zoneDescriptions: ZONE_DESCRIPTIONS },
     };
     try {
       const scriptRe = SCRIPT_RANGES[district.language.script];

@@ -35,14 +35,14 @@ function statusClass(s) {
 }
 
 const StatusCell = ({ value }) => <span className={`cell-status ${statusClass(value)}`}>{value}</span>;
-const ScenarioCell = ({ value }) => (value === 'SIMULATED' ? <span className="tag-sim">SIMULATED</span> : value === 'LIVE' ? <span className="tag-live">LIVE</span> : <span className="muted">—</span>);
+const ScenarioCell = ({ value }) => (value === 'SCENARIO' ? <span className="tag-sim">Scenario</span> : value === 'LIVE' ? <span className="tag-live">Live</span> : <span className="muted">—</span>);
 const RefCell = ({ value }) => <span className="mono" style={{ fontSize: 11.5 }}>{value}</span>;
 
 const SUGGESTIONS = [
   'Show unpaid pledges in Sylhet',
   'Household allocations in zone A in Sylhet',
   'Payout items that are not completed',
-  'Simulated captures over $20',
+  'Captures over $20',
 ];
 
 export default function Ledger({ rows, api, onError }) {
@@ -75,7 +75,7 @@ export default function Ledger({ rows, api, onError }) {
       headerName: 'Provenance',
       children: [
         { field: 'reference', headerName: 'PayPal reference', width: 220, cellRenderer: RefCell, tooltipField: 'reference' },
-        { field: 'scenario', headerName: 'Simulated', width: 120, cellRenderer: ScenarioCell },
+        { field: 'scenario', headerName: 'Basis', width: 110, cellRenderer: ScenarioCell },
         { field: 'provider', headerName: 'Provider', width: 140 },
         { field: 'note', headerName: 'Note', width: 260, tooltipField: 'note' },
       ],
@@ -127,7 +127,6 @@ export default function Ledger({ rows, api, onError }) {
       )}
       {result && (
         <div className="ask-result">
-          <span className={`source-line ${result.source === 'claude' ? '' : 'offline'}`}>{result.sourceLabel}</span>
           <span>{result.explanation}</span>
           {Object.entries(result.filterModel).map(([k, v]) => (
             <span key={k} className="cell-status st-neutral">{k} {v.conditions ? v.conditions.map((c) => `${c.type} ${c.filter}`).join(' OR ') : `${v.type} ${v.filter}`}</span>
@@ -153,7 +152,7 @@ export default function Ledger({ rows, api, onError }) {
           enableCellSpan
           tooltipShowDelay={300}
           animateRows={false}
-          overlayNoRowsTemplate='<span style="color:#667180">No ledger entries yet. Make a pledge to begin.</span>'
+          overlayNoRowsTemplate='<span style="color:#667180">No entries yet.</span>'
         />
       </div>
     </div>

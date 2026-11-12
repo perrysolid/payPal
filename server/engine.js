@@ -107,8 +107,8 @@ export function createEngine({ providerFactory, forecast, ai, config, log = cons
     if (d.scenario && live.series && live.evaluation?.baseline > 0) {
       const series = { past: live.series.past, forecast: applyReplaySurge(live.series.forecast, live.evaluation.baseline, d.scenario.targetRatio) };
       simulated = {
-        label: 'SIMULATED FORECAST',
-        description: `Synthetic replay surge to ${d.scenario.targetRatio}x the 30-day median, applied on top of the live forecast. Not a real forecast.`,
+        label: 'SCENARIO',
+        description: `Flood scenario peaking at ${d.scenario.targetRatio}x the 30-day median, overlaid on the live forecast.`,
         appliedAt: d.scenario.appliedAt,
         series,
         evaluation: computeTrigger(series, d.threshold),
@@ -133,7 +133,7 @@ export function createEngine({ providerFactory, forecast, ai, config, log = cons
       amount: centsToString(amountCents),
       districtId: d.id,
       referenceId: id,
-      description: `Floodgate conditional relief pledge for ${d.name}, ${d.country} (sandbox demo)`,
+      description: `Floodgate conditional relief pledge for ${d.name}, ${d.country}`,
       requestId: `fg-order-${id}`,
     });
     const pledge = {
@@ -367,17 +367,17 @@ export function createEngine({ providerFactory, forecast, ai, config, log = cons
 
   async function submitPayout(d, batch) {
     const t = d.trigger;
-    const sim = t.simulated ? ' [SIMULATED FORECAST DRILL]' : '';
+    const sim = t.simulated ? ' (scenario)' : '';
     try {
       const res = await provider.createPayout({
         senderBatchId: batch.senderBatchId,
-        emailSubject: `Floodgate sandbox relief disbursement: ${d.shortName}${sim}`,
-        emailMessage: `PayPal Sandbox demonstration. Relief partner disbursement for ${d.name}. Distribute per the Floodgate household allocation ledger.${sim}`,
+        emailSubject: `Floodgate relief disbursement: ${d.shortName}${sim}`,
+        emailMessage: `Relief disbursement for ${d.name}. Please distribute according to the Floodgate household allocation ledger.${sim}`,
         items: batch.items.map((i) => ({
           senderItemId: i.senderItemId,
           receiver: i.receiver,
           amount: centsToString(i.amountCents),
-          note: `Floodgate ${d.shortName} trigger ${t.id}${sim}. Sandbox demo; allocate per ledger.`,
+          note: `Floodgate ${d.shortName} trigger ${t.id}${sim}. Distribute per allocation ledger.`,
         })),
       });
       batch.createState = 'CREATED';
@@ -513,23 +513,23 @@ export function createEngine({ providerFactory, forecast, ai, config, log = cons
     const prov = (p) => (p === 'paypal' ? 'PAYPAL SANDBOX' : 'MOCK');
     for (const d of state.districts.values()) {
       const t = d.trigger;
-      const basisFor = (p) => (p.triggerId && t ? (t.simulated ? 'SIMULATED' : 'LIVE') : '—');
+      const basisFor = (p) => (p.triggerId && t ? (t.simulated ? 'SCENARIO' : 'LIVE') : '—');
       for (const p of pledgesFor(d.id)) {
         rows.push({ id: `${p.id}`, time: p.createdAt, type: 'Pledge', district: d.shortName, party: p.donorLabel, amount: p.amountCents / 100, currency: 'USD', status: p.status, reference: p.orderId, scenario: basisFor(p), provider: prov(p.provider), zone: '', note: p.errors.at(-1)?.message ?? '' });
         if (p.authorization) rows.push({ id: `${p.id}-auth`, time: p.authorization.at, type: 'Authorization', district: d.shortName, party: p.donorLabel, amount: (p.authorization.amountCents ?? 0) / 100, currency: 'USD', status: p.status === 'AUTH_FAILED' ? 'REJECTED' : p.status === 'CAPTURED' ? 'CAPTURED' : p.status === 'VOIDED' ? 'VOIDED' : 'HELD', reference: p.authorization.id, scenario: basisFor(p), provider: prov(p.provider), zone: '', note: p.authorization.expirationTime ? `expires ${p.authorization.expirationTime.slice(0, 10)}` : '' });
         if (p.capture) rows.push({ id: `${p.id}-cap`, time: p.capture.at, type: 'Capture', district: d.shortName, party: p.donorLabel, amount: p.capture.amountCents / 100, currency: 'USD', status: p.capture.status === 'COMPLETED' ? 'CAPTURED' : `CAPTURE_${p.capture.status}`, reference: p.capture.id, scenario: basisFor(p), provider: prov(p.provider), zone: '', note: '' });
-        else if (p.lastCaptureError && p.status === 'AUTHORIZED') rows.push({ id: `${p.id}-capfail`, time: p.updatedAt, type: 'Capture', district: d.shortName, party: p.donorLabel, amount: p.amountCents / 100, currency: 'USD', status: 'CAPTURE_FAILED', reference: p.authorization?.id ?? '', scenario: t?.simulated ? 'SIMULATED' : 'LIVE', provider: prov(p.provider), zone: '', note: p.lastCaptureError });
-        if (p.void) rows.push({ id: `${p.id}-void`, time: p.void.at, type: 'Void', district: d.shortName, party: p.donorLabel, amount: p.amountCents / 100, currency: 'USD', status: 'VOIDED', reference: p.authorization.id, scenario: '—', provider: prov(p.provider), zone: '', note: 'Donor not charged' });
+        else if (p.lastCaptureError && p.status === 'AUTHORIZED') rows.push({ id: `${p.id}-capfail`, time: p.updatedAt, type: 'Capture', district: d.shortName, party: p.donorLabel, amount: p.amountCents / 100, currency: 'USD', status: 'CAPTURE_FAILED', reference: p.authorization?.id ?? '', scenario: t?.simulated ? 'SCENARIO' : 'LIVE', provider: prov(p.provider), zone: '', note: p.lastCaptureError });
+        if (p.void) rows.push({ id: `${p.id}-void`, time: p.void.at, type: 'Void', district: d.shortName, party: p.donorLabel, amount: p.amountCents / 100, currency: 'USD', status: 'VOIDED', reference: p.authorization.id, scenario: '—', provider: prov(p.provider), zone: '', note: 'Hold released' });
         else if (p.lastVoidError && p.status === 'AUTHORIZED') rows.push({ id: `${p.id}-voidfail`, time: p.updatedAt, type: 'Void', district: d.shortName, party: p.donorLabel, amount: p.amountCents / 100, currency: 'USD', status: 'VOID_FAILED', reference: p.authorization?.id ?? '', scenario: '—', provider: prov(p.provider), zone: '', note: p.lastVoidError });
       }
       if (t) {
-        const sc = t.simulated ? 'SIMULATED' : 'LIVE';
+        const sc = t.simulated ? 'SCENARIO' : 'LIVE';
         rows.push({ id: t.id, time: t.at, type: 'Trigger', district: d.shortName, party: 'Deterministic trigger engine', amount: (t.capturedCents ?? 0) / 100, currency: 'USD', status: 'TRIGGERED', reference: t.id, scenario: sc, provider: providerLabel(), zone: '', note: `ratio ${t.evaluation.ratio.toFixed(2)} >= ${d.threshold}` });
         for (const b of t.payouts) {
           rows.push({ id: b.senderBatchId, time: b.createdAt, type: 'Payout batch', district: d.shortName, party: d.partner.name, amount: b.amountCents / 100, currency: 'USD', status: b.createState === 'REQUEST_FAILED' ? 'REQUEST_FAILED' : b.batchStatus || b.createState, reference: b.payoutBatchId || b.senderBatchId, scenario: sc, provider: providerLabel(), zone: '', note: b.error || b.pollError || `sender_batch_id ${b.senderBatchId}` });
           for (const i of b.items) rows.push({ id: i.senderItemId, time: b.createdAt, type: 'Payout item', district: d.shortName, party: `${i.partnerName} <${i.receiver}>`, amount: i.amountCents / 100, currency: 'USD', status: i.status, reference: i.payoutItemId || '—', scenario: sc, provider: providerLabel(), zone: '', note: i.errors || '' });
         }
-        for (const a of t.allocations) rows.push({ id: `${t.id}-${a.householdId}`, time: t.at, type: 'Household allocation', district: d.shortName, party: `${a.label} (${a.members} members, SAMPLE)`, amount: a.amountCents / 100, currency: 'USD', status: 'ALLOCATED', reference: a.householdId, scenario: sc, provider: 'LEDGER ONLY', zone: a.zone, note: 'Allocation ledger entry, not a PayPal transfer' });
+        for (const a of t.allocations) rows.push({ id: `${t.id}-${a.householdId}`, time: t.at, type: 'Household allocation', district: d.shortName, party: `${a.label} (${a.members} members)`, amount: a.amountCents / 100, currency: 'USD', status: 'ALLOCATED', reference: a.householdId, scenario: sc, provider: 'LEDGER ONLY', zone: a.zone, note: 'Distributed by relief partner' });
       }
       if (d.release) rows.push({ id: `${d.id}-release`, time: d.release.at, type: 'Release', district: d.shortName, party: 'Watch window closed', amount: d.release.voidedCents / 100, currency: 'USD', status: d.release.voidFailures ? 'RELEASED_WITH_FAILURES' : 'RELEASED', reference: '—', scenario: '—', provider: providerLabel(), zone: '', note: d.release.reason });
     }

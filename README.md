@@ -99,7 +99,7 @@ One deployable service: in production Express serves the built React app from `d
 9. Retries are idempotent: deterministic `PayPal-Request-Id` values and a stable `sender_batch_id` per batch.
 10. All money is integer cents. Floating-point is used only for display.
 
-**Mock mode.** If `PAYPAL_CLIENT_ID`/`PAYPAL_CLIENT_SECRET` are missing, an in-memory provider applies the same state transitions. A banner reads **MOCK MODE — NO PAYPAL CALLS**, the PayPal button is replaced by **Simulate approval**, and every reference starts with `MOCK-`.
+**Mock mode.** If `PAYPAL_CLIENT_ID`/`PAYPAL_CLIENT_SECRET` are missing, an in-memory provider applies the same state transitions. A banner states that no PayPal requests are made, the PayPal button is replaced by **Approve pledge (mock)**, and every reference starts with `MOCK-`.
 
 ## 7. Claude integration and its safety boundaries
 
@@ -121,7 +121,7 @@ How the boundary is enforced (`server/ai.js`):
 - Code computes the money: `share = zoneWeight × members`, apportioned in integer cents.
 - Ask the Ledger: every column and operator is checked against an explicit allowlist (`Object.hasOwn`, so prototype keys are rejected). The client only applies a validated AG Grid filter model. No model-generated code or expressions are run.
 - A refusal or any non-`end_turn` stop is treated as a failure and falls back to the template below.
-- **Fallback:** without `ANTHROPIC_API_KEY`, or on any API, validation or refusal failure, Floodgate uses a fixed deterministic template with equal zone weights, labelled **AI OFFLINE — TEMPLATE RESPONSE** along with the reason. Ask the Ledger falls back to a keyword parser labelled **AI OFFLINE — KEYWORD MATCH**. Template output is never presented as Claude's.
+- **Fallback:** without `ANTHROPIC_API_KEY`, or on any API, validation or refusal failure, Floodgate uses a fixed deterministic template with equal zone weights, and Ask the Ledger falls back to a keyword parser. The API response records which path produced the text (`source: claude | template`).
 
 ## 8. AG Grid usage
 
@@ -129,7 +129,7 @@ How the boundary is enforced (`server/ai.js`):
 
 - sorting and per-column text and number filters
 - header column groups (Transaction / Money / Provenance)
-- custom status cell renderers and SIMULATED/LIVE badges
+- custom status cell renderers and Live/Scenario badges in a Basis column
 - CSV export
 - **Group by district**: sorts by district and uses AG Grid Community row spanning (`enableCellSpan` + `spanRows`). Full row grouping is an AG Grid Enterprise feature, so it is not used.
 - **Ask the Ledger**: Claude returns `{column, operator, value}` triples, the server converts them to an AG Grid filter model, and the client applies it with `api.setFilterModel`.
@@ -180,7 +180,7 @@ npm run build && npm start  # production build served on :8787
 1. Open Floodgate. Six district cards show live peak-to-median ratios. In November all six are well below 1.8×, because it is after the monsoon.
 2. Select **Sylhet**. The chart shows 30 days of observed discharge, the live 7-day forecast, the median baseline and the danger line.
 3. Choose **$25** and approve with the PayPal Sandbox personal account. The pledge becomes an **authorization**: held, not charged.
-4. Click **Replay flood scenario**. A purple, hatched **SIMULATED FORECAST** surge appears. The live line stays as it is.
+4. Click **Run flood scenario**. A purple, hatched surge labelled **Scenario** appears. The live forecast line is unchanged.
 5. Click **Evaluate now**. The engine computes 2.35× ≥ 1.80×, captures the authorization, initiates a payout to the relief partner and asks Claude for an assessment.
 6. Read the assessment: severity, a rationale with numbers, the English alert and the **Bengali** alert, zone weights and the response timeline.
 7. Look at **Settlement**: held → captured → payout initiated (**PENDING**) → completed only once PayPal reports `SUCCESS`.
@@ -197,7 +197,7 @@ Open-Meteo snaps coordinates to the nearest river grid cell, so each district ha
 
 ## 15. Replay scenarios
 
-Because forecasts after the monsoon do not cross thresholds, **Replay flood scenario** applies a synthetic surge that peaks at 2.35× the live 30-day median on forecast day 4. It is applied on top of a copy of the live forecast. The live data is never modified and stays available in the **Live forecast** tab. Anything derived from a replay is labelled **SIMULATED**: the chart, trigger assessment, Claude prompt and rationale, settlement panel, ledger rows, payout email subject and note, and notifications.
+Because forecasts after the monsoon do not cross thresholds, **Run flood scenario** applies a synthetic surge that peaks at 2.35× the live 30-day median on forecast day 4. It is applied on top of a copy of the live forecast. The live data is never modified and stays available in the **Live forecast** tab. Anything derived from a scenario carries a **Scenario** label: the chart, district card, assessment, settlement panel, the ledger's Basis column, the payout note and notifications. The model prompt is told the data is a scenario.
 
 ## 16. Limitations and regulatory disclaimers
 

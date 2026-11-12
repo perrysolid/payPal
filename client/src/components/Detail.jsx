@@ -35,7 +35,7 @@ export default function Detail({ district: d, forecast: fc, config, busy, action
             <h3 className="detail-title">{d.name}</h3>
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            {isSim ? <span className="tag-sim">SIMULATED FORECAST</span> : series ? <span className="tag-live">LIVE FORECAST</span> : null}
+            {isSim ? <span className="tag-sim">Scenario</span> : series ? <span className="tag-live">Live forecast</span> : null}
             <span className={`status ${st.key}`}>{st.label}</span>
           </div>
         </div>
@@ -43,7 +43,7 @@ export default function Detail({ district: d, forecast: fc, config, busy, action
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 18px 0', gap: 10, flexWrap: 'wrap' }}>
           <div className="chart-tabs" role="tablist" aria-label="Forecast view">
             <button type="button" className={effectiveView === 'live' ? 'on' : ''} onClick={() => setView('live')} disabled={!fc?.live?.series}>Live forecast</button>
-            <button type="button" className={effectiveView === 'sim' ? 'on' : ''} onClick={() => setView('sim')} disabled={!hasSim}>Simulated replay</button>
+            <button type="button" className={effectiveView === 'sim' ? 'on' : ''} onClick={() => setView('sim')} disabled={!hasSim}>Scenario</button>
             <button type="button" className={effectiveView === 'trigger' ? 'on' : ''} onClick={() => setView('trigger')} disabled={!atTrigger}>At trigger</button>
           </div>
           <div className="muted" style={{ fontSize: 12 }}>
@@ -62,7 +62,7 @@ export default function Detail({ district: d, forecast: fc, config, busy, action
         <div className="chart-legend">
           <span className="lg"><i style={{ borderColor: '#0e1b2a' }} />Observed (30 days)</span>
           <span className="lg"><i style={{ borderColor: '#1e6a8d', borderTopStyle: 'dashed' }} />Live forecast (7 days)</span>
-          {simSeries && <span className="lg"><i style={{ borderColor: '#6a3fae', borderTopWidth: 3 }} />Simulated replay surge (synthetic)</span>}
+          {simSeries && <span className="lg"><i style={{ borderColor: '#6a3fae', borderTopWidth: 3 }} />Scenario forecast</span>}
           <span className="lg"><i style={{ borderColor: '#667180', borderTopStyle: 'dashed' }} />Baseline (median)</span>
           <span className="lg"><i style={{ borderColor: '#b0411e' }} />Danger threshold</span>
         </div>
@@ -70,7 +70,7 @@ export default function Detail({ district: d, forecast: fc, config, busy, action
         <div className="kpis">
           <div className="kpi"><div className="l">30-day median baseline</div><div className="v">{m3s(ev?.baseline)}</div></div>
           <div className="kpi"><div className="l">7-day forecast peak {ev?.peakDate ? `(${shortDate(ev.peakDate)})` : ''}</div><div className="v">{m3s(ev?.peak)}</div></div>
-          <div className="kpi"><div className="l">Ratio {isSim && <span className="tag-sim" style={{ fontSize: 9 }}>SIM</span>}</div><div className={`v ${ev?.trigger ? 'hot' : ''}`}>{ratio(ev?.ratio)}</div></div>
+          <div className="kpi"><div className="l">Ratio {isSim && <span className="tag-sim" style={{ fontSize: 9 }}>Scenario</span>}</div><div className={`v ${ev?.trigger ? 'hot' : ''}`}>{ratio(ev?.ratio)}</div></div>
           <div className="kpi"><div className="l">Danger threshold</div><div className="v">{d.threshold.toFixed(2)}×</div></div>
         </div>
       </div>
@@ -110,7 +110,7 @@ function ActionPanel({ d, fc, config, busy, actions }) {
             </div>
             {isMock ? (
               <button type="button" className="btn" disabled={!amountValid || anyBusy} onClick={() => actions.mockPledge(pledgeRef.current)}>
-                {busy === 'pledge' ? <span className="spinner" /> : null} Simulate approval (mock)
+                {busy === 'pledge' ? <span className="spinner" /> : null} Approve pledge (mock)
               </button>
             ) : (
               <PayPalButtons
@@ -123,7 +123,6 @@ function ActionPanel({ d, fc, config, busy, actions }) {
                 onCancel={actions.paypalCancel}
               />
             )}
-            {!isMock && <p className="action-help" style={{ margin: '6px 0 0' }}>Use a PayPal <b>Sandbox</b> personal account to approve. No real money moves.</p>}
           </>
         ) : (
           <div className="closed-note">Pledging is closed: this watch window has {d.status === 'TRIGGERED' ? 'triggered' : 'been released'}.</div>
@@ -131,20 +130,20 @@ function ActionPanel({ d, fc, config, busy, actions }) {
       </div>
 
       <div className="action-block">
-        <div className="action-title"><span><span className="eyebrow" style={{ marginRight: 6 }}>02</span>Replay scenario</span>{d.scenario && <span className="tag-sim">ACTIVE</span>}</div>
-        <p className="action-help">Applies a synthetic surge (to {d.scenario?.targetRatio ?? 2.35}× the 30-day median) on top of the live forecast so the trigger can be demonstrated after the monsoon. Live data is not modified and every resulting record is labelled SIMULATED.</p>
+        <div className="action-title"><span><span className="eyebrow" style={{ marginRight: 6 }}>02</span>Flood scenario</span>{d.scenario && <span className="tag-sim">Active</span>}</div>
+        <p className="action-help">Overlays a flood surge on the current forecast, peaking at {d.scenario?.targetRatio ?? 2.35}× the 30-day median, to rehearse the trigger and settlement. The live forecast is unchanged.</p>
         {open ? (
           <button type="button" className={`btn sim ${d.scenario ? 'on' : ''}`} disabled={anyBusy || !fc?.live?.series} onClick={() => actions.scenario(!d.scenario)}>
-            {busy === 'scenario' ? <span className="spinner" /> : null}{d.scenario ? 'Clear simulated scenario' : 'Replay flood scenario'}
+            {busy === 'scenario' ? <span className="spinner" /> : null}{d.scenario ? 'Clear scenario' : 'Run flood scenario'}
           </button>
         ) : (
-          <div className="closed-note">{d.trigger?.simulated ? 'This trigger came from the simulated scenario. Reset the demo to run it again.' : 'Replay is only available while the district is watching.'}</div>
+          <div className="closed-note">{d.trigger?.simulated ? 'Triggered under a scenario. Use Reset to run it again.' : 'Scenarios are available while the district is watching.'}</div>
         )}
       </div>
 
       <div className="action-block">
         <div className="action-title"><span><span className="eyebrow" style={{ marginRight: 6 }}>03</span>Evaluate trigger</span></div>
-        <p className="action-help">The deterministic engine computes peak ÷ median and compares it with {d.threshold.toFixed(2)}×. If met: held pledges are captured, a payout to the relief partner is initiated and Claude drafts the risk assessment.</p>
+        <p className="action-help">Compares the forecast peak with the 30-day median. At {d.threshold.toFixed(2)}× or above, held pledges are captured, the relief partner is paid and a risk assessment is issued.</p>
         <button type="button" className="btn" disabled={d.status === 'RELEASED' || anyBusy} onClick={actions.evaluate}>
           {busy === 'evaluate' ? <span className="spinner" /> : null}{d.status === 'TRIGGERED' ? 'Re-check settlement' : 'Evaluate now'}
         </button>
@@ -153,7 +152,7 @@ function ActionPanel({ d, fc, config, busy, actions }) {
             <li className="on"><span className="spinner" />Checking forecast against threshold</li>
             <li>Capturing held authorizations if triggered</li>
             <li>Initiating relief-partner payout</li>
-            <li>Requesting Claude risk assessment</li>
+            <li>Preparing risk assessment</li>
           </ul>
         )}
       </div>

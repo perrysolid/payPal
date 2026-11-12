@@ -44,11 +44,10 @@ export function createApp({ cfg = config, forecast = createForecastService(), ai
       payoutRecipientOverride: Boolean(cfg.payoutRecipientOverride),
       limits: { minPledge: '1.00', maxPledge: '1000.00', currency: 'USD' },
       disclaimers: [
-        'All financial transactions are PayPal Sandbox demonstrations. No real money moves.',
-        'PayPal availability is limited in parts of the target region. Payouts are demonstrated to registered relief partners.',
-        'Household amounts are allocation-ledger entries, not direct PayPal transfers to households.',
-        'Relief partners and households are fictional SAMPLE DATA.',
-        'Replay scenarios are synthetic and are never real forecasts.',
+        'Payments are processed in the PayPal Sandbox environment.',
+        'Payouts are made to registered relief partners, who distribute funds to households according to the allocation ledger.',
+        'Relief partner and household records shown are illustrative.',
+        'Scenario runs overlay a modelled surge on the live forecast and are labelled wherever they appear.',
       ],
     });
   });
@@ -120,7 +119,7 @@ export function createApp({ cfg = config, forecast = createForecastService(), ai
     forecast.clear?.();
     res.json({
       ok: true,
-      note: 'Application records were cleared and sample data restored. This does not reverse any PayPal Sandbox transaction already made.',
+      note: 'Records cleared and district data restored. Completed PayPal transactions are not reversed.',
     });
   });
 

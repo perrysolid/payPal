@@ -103,7 +103,7 @@ export default function Chart({ live, simulated, showSim, baseline, threshold })
         <text x={model.todayX - 6} y={PAD.t + 10} fontSize="10.5" fill="#667180" textAnchor="end" fontFamily="IBM Plex Mono">OBSERVED</text>
 
         {model.simArea && <path d={model.simArea} fill="url(#simhatch)" />}
-        {model.simArea && <text x={W - PAD.r - 6} y={H - PAD.b - 8} textAnchor="end" fontSize="11" fontWeight="600" fill="#6a3fae" fontFamily="IBM Plex Mono">SIMULATED FORECAST</text>}
+        {model.simArea && <text x={W - PAD.r - 6} y={H - PAD.b - 8} textAnchor="end" fontSize="11" fontWeight="600" fill="#6a3fae" fontFamily="IBM Plex Mono">SCENARIO</text>}
 
         <line x1={PAD.l} x2={W - PAD.r} y1={y(baseline)} y2={y(baseline)} stroke="#667180" strokeDasharray="6 4" strokeWidth="1.3" />
         <text x={PAD.l + 6} y={y(baseline) - 5} fontSize="10.5" fill="#33404f" fontFamily="IBM Plex Mono">30-day median {m3s(baseline)}</text>
@@ -133,7 +133,7 @@ export default function Chart({ live, simulated, showSim, baseline, threshold })
         }}>
           <div className="mono" style={{ opacity: 0.7, fontSize: 11 }}>{shortDate(hp.date)} · {hover >= todayIdx ? 'forecast' : 'observed'}</div>
           <div className="mono">Live: {m3s(hp.value)}</div>
-          {hSim && <div className="mono" style={{ color: '#cdb8f0' }}>Simulated: {m3s(hSim.value)}</div>}
+          {hSim && <div className="mono" style={{ color: '#cdb8f0' }}>Scenario: {m3s(hSim.value)}</div>}
         </div>
       )}
     </div>

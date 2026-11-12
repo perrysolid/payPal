@@ -37,7 +37,7 @@ export default function Settlement({ district: d, pledges, onRefresh, busy }) {
       <div className="panel-head">
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <span className="panel-title">Settlement</span>
-          {t.simulated ? <span className="tag-sim">SIMULATED FORECAST DRILL</span> : <span className="tag-live">LIVE TRIGGER</span>}
+          {t.simulated ? <span className="tag-sim">Scenario</span> : <span className="tag-live">Live trigger</span>}
           <span className="mono muted" style={{ fontSize: 11.5 }}>{t.id} · {time(t.at)}</span>
         </div>
         <button type="button" className="btn secondary" style={{ width: 'auto', padding: '5px 12px', fontSize: 12.5 }} onClick={onRefresh} disabled={busy}>
@@ -48,12 +48,12 @@ export default function Settlement({ district: d, pledges, onRefresh, busy }) {
         <div className="flow-step">
           <div className="l"><span>1 · Held at trigger</span></div>
           <div className="v">{usd(t.heldAtTriggerCents)}</div>
-          <div className="s">PayPal authorizations (not yet charged)</div>
+          <div className="s">Authorized, not yet charged</div>
         </div>
         <div className="flow-step">
           <div className="l"><span>2 · Captured</span>{failedCaptures.length ? <span className="cell-status st-bad">{failedCaptures.length} FAILED</span> : null}</div>
           <div className="v">{usd(t.capturedCents)}</div>
-          <div className="s">{failedCaptures.length ? `${failedCaptures.length} capture(s) failed; press Re-check settlement to retry` : 'Donor funds captured into the sandbox merchant account'}</div>
+          <div className="s">{failedCaptures.length ? `${failedCaptures.length} capture(s) failed; press Re-check settlement to retry` : 'Held pledges charged'}</div>
         </div>
         <div className="flow-step">
           <div className="l"><span>3 · Payout initiated</span>{batch && <span className={`cell-status ${batch.createState === 'REQUEST_FAILED' ? 'st-bad' : batch.batchStatus === 'SUCCESS' ? 'st-ok' : 'st-pending'}`}>{batch.createState === 'REQUEST_FAILED' ? 'REQUEST FAILED' : batch.batchStatus}</span>}</div>
@@ -78,7 +78,7 @@ export default function Settlement({ district: d, pledges, onRefresh, busy }) {
               <thead><tr><th>Recipient</th><th>Status</th><th>Item ID</th><th className="n">Amount</th></tr></thead>
               <tbody>{items.map((i) => (
                 <tr key={i.senderItemId}>
-                  <td>{i.partnerName} <span className="tag-sample">SAMPLE</span><div className="muted mono" style={{ fontSize: 11 }}>{i.receiver}</div></td>
+                  <td>{i.partnerName}<div className="muted mono" style={{ fontSize: 11 }}>{i.receiver}</div></td>
                   <td>{ITEM_LABEL[i.status] || i.status}{i.errors ? <div className="muted" style={{ fontSize: 11 }}>{i.errors}</div> : null}</td>
                   <td className="mono" style={{ fontSize: 11 }}>{i.payoutItemId || '—'}</td>
                   <td className="n">{usd(i.amountCents)}</td>
@@ -88,10 +88,10 @@ export default function Settlement({ district: d, pledges, onRefresh, busy }) {
           ) : <div className="empty">No payout items.</div>}
           <div className="reconcile">
             <span className={`check ${payoutTotal <= (t.capturedCents ?? 0) ? '' : 'bad'}`}>{payoutTotal <= (t.capturedCents ?? 0) ? '✓' : '✗'}</span>
-            <span>Payout total {usd(payoutTotal)} does not exceed captured {usd(t.capturedCents)} (enforced on the server).</span>
+            <span>Payout total {usd(payoutTotal)} does not exceed captured {usd(t.capturedCents)}.</span>
           </div>
           <div className="panel-pad" style={{ borderTop: '1px solid var(--line-2)', fontSize: 12.5, color: 'var(--ink-2)' }}>
-            <div className="eyebrow" style={{ marginBottom: 6 }}>What these states mean</div>
+            <div className="eyebrow" style={{ marginBottom: 6 }}>Payment states</div>
             <p style={{ margin: '0 0 6px' }}><b>Authorization</b>: a hold on the donor’s PayPal funds. Nothing is charged.</p>
             <p style={{ margin: '0 0 6px' }}><b>Capture</b>: the held amount is charged after the deterministic trigger.</p>
             <p style={{ margin: '0 0 6px' }}><b>Payout initiated</b>: PayPal accepted the batch. <b>Completed</b> is shown only once PayPal reports the item as SUCCESS.</p>
@@ -101,7 +101,6 @@ export default function Settlement({ district: d, pledges, onRefresh, busy }) {
         <div>
           <div className="panel-pad" style={{ paddingBottom: 8, display: 'flex', justifyContent: 'space-between', gap: 8 }}>
             <div className="eyebrow">Household allocation ledger</div>
-            <span className="tag-sample">SAMPLE HOUSEHOLDS</span>
           </div>
           {t.allocations.length ? (
             <table className="alloc">
@@ -114,7 +113,7 @@ export default function Settlement({ district: d, pledges, onRefresh, busy }) {
           ) : <div className="empty">No captured funds to allocate.</div>}
           <div className="reconcile">
             <span className={`check ${reconciled ? '' : 'bad'}`}>{reconciled ? '✓' : '✗'}</span>
-            <span>Allocations {usd(allocTotal)} {reconciled ? 'reconcile exactly to' : 'DO NOT match'} captured {usd(t.capturedCents)}. Integer-cent largest-remainder rounding. These are ledger entries for the relief partner, not PayPal transfers to households.</span>
+            <span>Allocations {usd(allocTotal)} {reconciled ? 'reconcile exactly to' : 'DO NOT match'} captured {usd(t.capturedCents)}. Household amounts are distribution instructions for the relief partner.</span>
           </div>
         </div>
       </div>

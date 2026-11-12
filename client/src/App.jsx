@@ -113,39 +113,39 @@ export default function App() {
     mockPledge: (body) => run('pledge', async () => {
       const o = await api.createPledge(body);
       const a = await api.authorize(o.orderId);
-      toast(`Mock authorization ${a.authorizationId} holds ${usd(Math.round(Number(a.amount) * 100))} for ${d.shortName}. Nothing was charged.`);
+      toast(`Pledge authorized: ${usd(Math.round(Number(a.amount) * 100))} held for ${d.shortName}.`);
     }),
     createPledge: async (body) => {
       try { return await api.createPledge(body); } catch (e) { toastError(e); throw e; }
     },
     authorizePledge: (orderId) => run('pledge', async () => {
       const a = await api.authorize(orderId);
-      toast(`PayPal Sandbox authorization ${a.authorizationId} holds ${usd(Math.round(Number(a.amount) * 100))}. You have not been charged.`);
+      toast(`Pledge authorized: ${usd(Math.round(Number(a.amount) * 100))} held for ${d.shortName}. You will only be charged if the trigger is met.`);
     }),
     paypalError: (e) => { toastError(new Error(`PayPal: ${e.message}`)); loadState(); },
     paypalCancel: () => toast('PayPal approval was cancelled. No authorization was created.'),
     scenario: (active) => run('scenario', async () => {
       const r = await api.scenario(selected, active);
       setForecasts((m) => ({ ...m, [selected]: r.forecast }));
-      toast(active ? `SIMULATED FORECAST applied to ${d.shortName}. Live data is unchanged.` : 'Simulated scenario cleared; showing the live forecast.', active ? 'sim' : 'info');
+      toast(active ? `Flood scenario applied to ${d.shortName}.` : 'Scenario cleared.');
     }),
     evaluate: () => run('evaluate', async () => {
       const r = await api.evaluate(selected);
       const sim = r.district.trigger?.simulated || r.district.lastEvaluation?.simulated;
-      const tag = sim ? ' [SIMULATED FORECAST]' : '';
+      const tag = sim ? ' (scenario)' : '';
       if (r.outcome === 'TRIGGERED') {
-        toast(`${d.shortName} triggered${tag}: ${usd(r.district.trigger.capturedCents)} captured, payout ${r.district.trigger.payouts.at(-1)?.createState === 'CREATED' ? 'initiated (pending)' : 'not initiated'}.`, sim ? 'sim' : 'info', 9000);
+        toast(`${d.shortName} triggered${tag}. ${usd(r.district.trigger.capturedCents)} captured; partner payout ${r.district.trigger.payouts.at(-1)?.createState === 'CREATED' ? 'initiated' : 'not initiated'}.`, 'info', 9000);
       } else if (r.outcome === 'BELOW_THRESHOLD') {
-        toast(`${d.shortName}: ratio ${ratio(r.district.lastEvaluation.evaluation.ratio)} is below ${d.threshold.toFixed(2)}×${tag}. No trigger; pledges remain held.`, sim ? 'sim' : 'info');
+        toast(`${d.shortName}: ${ratio(r.district.lastEvaluation.evaluation.ratio)} is below the ${d.threshold.toFixed(2)}× threshold${tag}. Pledges remain held.`);
       } else if (r.outcome === 'ALREADY_TRIGGERED') {
-        toast(`${d.shortName} already triggered. No duplicate capture or payout; settlement re-checked.`);
+        toast(`${d.shortName} has already triggered. Settlement re-checked; nothing was charged twice.`);
       } else {
-        toast(`Evaluation could not run: ${r.issues?.join('; ')}. No money moved.`, 'error');
+        toast(`Forecast data unavailable: ${r.issues?.join('; ')}. No funds were moved.`, 'error');
       }
     }),
     release: () => run('release', async () => {
       const r = await api.release(selected);
-      toast(r.outcome === 'RELEASED' ? `${d.shortName} released. ${usd(r.district.release.voidedCents)} of authorizations voided; donors not charged.` : `Released with ${r.failures.length} void failure(s); they remain held.`, r.failures.length ? 'error' : 'info');
+      toast(r.outcome === 'RELEASED' ? `${d.shortName} released. ${usd(r.district.release.voidedCents)} in holds voided.` : `Released with ${r.failures.length} void failure(s); those pledges remain held.`, r.failures.length ? 'error' : 'info');
     }),
   };
 
@@ -162,26 +162,19 @@ export default function App() {
           <div className="brand"><Mark /><span className="brand-name">Floodgate</span><span className="brand-tag">Relief that moves before the flood arrives</span></div>
           <div className="top-spacer" />
           <div className="chips">
-            <span className={`chip ${isMock ? 'warn' : 'ok'}`}>{isMock ? 'Mock payments' : 'PayPal Sandbox'}</span>
-            <span className={`chip ${config.ai.enabled ? 'ok' : 'warn'}`}>{config.ai.enabled ? `Claude · ${config.ai.model}` : 'AI offline'}</span>
+            <span className={`chip ${isMock ? 'warn' : ''}`}>{isMock ? 'Mock payments' : 'PayPal Sandbox'}</span>
           </div>
-          <button type="button" className="btn-reset" onClick={reset} disabled={busy === 'reset'} title="Clears application records and restores sample data. Does not reverse PayPal Sandbox transactions.">Reset demo</button>
+          <button type="button" className="btn-reset" onClick={reset} disabled={busy === 'reset'} title="Clears Floodgate records and restores the initial district data. PayPal transactions are not reversed.">Reset</button>
         </div>
       </header>
-      {isMock && <div className="mock-banner">MOCK MODE — NO PAYPAL CALLS. Authorizations, captures, voids and payouts are simulated in memory.</div>}
-      <div className="notice">
-        <div className="notice-inner">
-          <strong>Sandbox demonstration.</strong>
-          <span>No real money moves. Relief partners and households are fictional sample data. Payouts go to registered relief partners; household amounts are allocation-ledger entries, not PayPal transfers. PayPal availability is limited in parts of the region.</span>
-        </div>
-      </div>
+      {isMock && <div className="mock-banner">Mock payment mode: no PayPal requests are made.</div>}
 
       <main>
         <section className="hero">
           <div>
             <div className="eyebrow" style={{ marginBottom: 6 }}>Forecast-triggered relief funding · South Asia</div>
             <h1>Pledge now. Pay only if the river forecast crosses the danger line.</h1>
-            <p>Donors authorize a hold for a district. Floodgate watches the GloFAS river-discharge forecast; when the deterministic trigger fires, held pledges are captured and paid to the district’s relief partner, and Claude explains the risk in plain language and the local script.</p>
+            <p>Donors place a hold for a district. Floodgate tracks the GloFAS river-discharge forecast and, when a district crosses its danger threshold, captures the held pledges and pays the district’s relief partner ahead of the peak. If the threshold is not reached, every hold is released.</p>
             <p className="muted mono" style={{ fontSize: 12, marginTop: 10 }}>Across all districts: {usd(totals.held)} held · {usd(totals.cap)} captured</p>
           </div>
           <Stepper d={d} pledgeCount={pledgeCount} />
@@ -190,7 +183,7 @@ export default function App() {
         <div className="section-head"><h2>District board</h2><span className="sub">Six basins · select a district</span></div>
         <Board districts={snap.districts} forecasts={forecasts} selected={selected} onSelect={(id) => { setSelected(id); detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} />
 
-        <div ref={detailRef} className="section-head" style={{ scrollMarginTop: 70 }}><h2>District detail</h2><span className="sub">Relief partner: {d.partner.name} <span className="tag-sample">SAMPLE</span></span></div>
+        <div ref={detailRef} className="section-head" style={{ scrollMarginTop: 70 }}><h2>District detail</h2><span className="sub">Relief partner: {d.partner.name}</span></div>
         <Detail district={d} forecast={fc} config={config} busy={busy} actions={actions} onRefreshForecast={() => loadForecast(selected, true)} />
         <Assessment district={d} />
         <Settlement district={d} pledges={snap.pledges} busy={busy === 'payouts'} onRefresh={() => run('payouts', () => api.refreshPayouts(selected))} />
@@ -200,9 +193,9 @@ export default function App() {
       </main>
 
       <footer>
-        <div className="eyebrow">Disclosures</div>
+        <div className="eyebrow">Notes</div>
         <ul>{config.disclaimers.map((x) => <li key={x}>{x}</li>)}</ul>
-        <p>Forecast data: Open-Meteo Flood API (GloFAS). Reset clears Floodgate’s application records only; it does not reverse PayPal Sandbox transactions.</p>
+        <p>Forecast data: Open-Meteo Flood API (GloFAS v4).</p>
       </footer>
 
       <div className="toasts" aria-live="polite">

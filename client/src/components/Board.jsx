@@ -39,7 +39,7 @@ export default function Board({ districts, forecasts, selected, onSelect }) {
                 {fc === undefined ? <span className="skeleton" style={{ width: 80, height: 28, display: 'inline-block' }} />
                   : <span className="ratio" style={{ color: ev?.trigger ? 'var(--danger)' : undefined }}>{ratio(r)}</span>}
                 <span className="ratio-unit">peak / 30-day median</span>
-                {sim && <span className="tag-sim" style={{ marginLeft: 'auto' }}>SIMULATED</span>}
+                {sim && <span className="tag-sim" style={{ marginLeft: 'auto' }}>Scenario</span>}
               </div>
               <div className="gauge" style={{ marginTop: 8 }} aria-hidden="true">
                 <div className={`gauge-fill ${sim ? 'sim' : ev?.trigger ? 'hot' : ''}`} style={{ width: `${pct}%` }} />
@@ -53,7 +53,6 @@ export default function Board({ districts, forecasts, selected, onSelect }) {
             </div>
             <div className="card-foot">
               <span>{fc?.live?.fetchedAt ? `Forecast ${ago(fc.live.fetchedAt)}${fc.live.stale ? ' (stale)' : ''}` : fc?.live?.error ? 'Forecast unavailable' : 'Loading forecast'}</span>
-              <span className="tag-sample">SAMPLE DATA</span>
             </div>
           </button>
         );

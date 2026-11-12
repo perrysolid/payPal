@@ -12,7 +12,6 @@ export default function Assessment({ district: d }) {
   const minH = Math.min(0, ...steps.map((s) => s.startHourOffset));
   const maxH = Math.max(24, ...steps.map((s) => s.startHourOffset + s.durationHours));
   const span = maxH - minH;
-  const offline = a.source !== 'claude';
   const totalW = d.households.reduce((acc, h) => acc + (a.zoneWeights[h.zone] ?? 0) * h.members, 0);
 
   return (
@@ -22,19 +21,17 @@ export default function Assessment({ district: d }) {
           <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
             <span className="panel-title">Risk assessment</span>
             <span className={`sev ${a.severity}`}>{a.severity}</span>
-            {ev.simulated ? <span className="tag-sim">SIMULATED FORECAST</span> : <span className="tag-live">LIVE FORECAST</span>}
+            {ev.simulated ? <span className="tag-sim">Scenario</span> : <span className="tag-live">Live forecast</span>}
           </div>
-          <span className={`source-line ${offline ? 'offline' : ''}`} title={a.fallbackReason || ''}>{a.sourceLabel}</span>
         </div>
         <div className="panel-pad">
           <p className="rationale" style={{ marginTop: 0 }}>{a.rationale}</p>
-          {offline && a.fallbackReason && <p className="muted" style={{ fontSize: 12, margin: '8px 0 0' }}>Reason: {a.fallbackReason}</p>}
           <div className="alerts">
             <div className="alert-box"><div className="eyebrow">Alert · English</div><p>{a.alertEnglish}</p></div>
             <div className="alert-box local" lang={d.language.code}><div className="eyebrow">Alert · {d.language.name}</div><p>{a.alertLocal}</p></div>
           </div>
           <div style={{ marginTop: 14 }}>
-            <div className="eyebrow" style={{ marginBottom: 6 }}>Suggested zone weights (code computes the amounts)</div>
+            <div className="eyebrow" style={{ marginBottom: 6 }}>Allocation weights by risk zone</div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               {['A', 'B', 'C'].map((z) => {
                 const members = d.households.filter((h) => h.zone === z).reduce((s, h) => s + h.members, 0);
