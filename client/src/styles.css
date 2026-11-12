@@ -306,3 +306,13 @@ footer ul { margin: 6px 0 0; padding-left: 18px; }
   .grid-host { height: 420px; }
   .alloc th:nth-child(3), .alloc td:nth-child(3) { display: none; }
 }
+
+/* Settlement tables on narrow screens */
+.settle-grid > div { min-width: 0; overflow-x: auto; }
+.alloc td { overflow-wrap: anywhere; }
+@media (max-width: 640px) {
+  .alloc th, .alloc td { padding: 7px 8px; }
+  .alloc.payout th:nth-child(3), .alloc.payout td:nth-child(3) { display: none; }
+  .settle .panel-head .btn { width: 100%; }
+}
+@media (max-width: 640px) { .topbar { position: static; } }

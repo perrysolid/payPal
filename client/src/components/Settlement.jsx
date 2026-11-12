@@ -74,7 +74,7 @@ export default function Settlement({ district: d, pledges, onRefresh, busy }) {
             <div className="eyebrow">Relief partner payout</div>
           </div>
           {items.length ? (
-            <table className="alloc">
+            <table className="alloc payout">
               <thead><tr><th>Recipient</th><th>Status</th><th>Item ID</th><th className="n">Amount</th></tr></thead>
               <tbody>{items.map((i) => (
                 <tr key={i.senderItemId}>
